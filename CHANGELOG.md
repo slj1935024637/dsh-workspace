@@ -4,6 +4,8 @@
 
 ## 未发布
 
+## 0.9.1（2026-09-29）
+
 - 修复：浏览器 bundle 注册到 `window.__ModuleLoader__` 的 id 仍写死旧包名，宿主 `dsh-client-modules` 按包名核对不通过（`loaded without registering "<id>"`），会让 DSH Desktop 直接启动失败（0.8.0 / 0.9.0 都受影响）；现改为从 `package.json` 现读包名，并补冒烟断言 `ModuleLoader 注册 id = 包名` 兜住这类改名漏改
 
 ## 0.9.0（2026-09-29）
