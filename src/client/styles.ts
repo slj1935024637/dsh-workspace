@@ -19,6 +19,8 @@ export const CSS = `
   padding: 16px 32px 12px;
   box-sizing: border-box;
   width: 100%; max-width: 100%; min-width: 0;
+  /* 窄屏的文件预览浮层以本页为定位上下文（absolute），这样不会盖住宿主网页版的头部 */
+  position: relative;
   /* 宽度只由外层决定、不由内容撑开：宿主外层若是 grid / min-width:auto 的容器，
      文件 / 终端 / 日志页里的宽内容会把整页撑宽，右上角开关就被推出可视区 */
   contain: inline-size;
@@ -724,6 +726,10 @@ export const CSS = `
 /* 代码编辑器 */
 .dshws-code { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .dshws-code-host { flex: 1 1 auto; min-height: 0; }
+/* Monaco 在 iPad / 触屏 UA 下会自己渲染一个悬浮键盘按钮（editor.contrib.iPadShowKeyboard，
+ * 元素类名就是 iPadShowKeyboard）：手机上点了不会按预期唤出输入法，直接隐藏。
+ * 只作用于本插件的编辑器，宿主其它 Monaco 实例不受影响。 */
+.dshws-code-host .iPadShowKeyboard { display: none !important; }
 .dshws-code-status {
   flex-shrink: 0; display: flex; gap: 12px; justify-content: flex-end;
   padding: 3px 12px; font-size: 11px; color: var(--dsw-alias-label-tertiary);
@@ -982,6 +988,67 @@ export const CSS = `
 .dshws-icon-btn[data-danger="true"]:hover { color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 
 .dshws-panel-icon { display: inline-flex; align-items: center; justify-content: center; }
+
+/* 窄屏（≤640px）：只新增规则，不改动上面的桌面样式。
+ * ⚠️ 断点必须与 src/client/narrow.ts 的 NARROW_MAX_WIDTH 保持一致。 */
+@media (max-width: 640px) {
+  /* 1. 页面内边距收窄 */
+  .dshws-page { padding-left: 12px; padding-right: 12px; }
+  /* 2. 头部不换行：标题缩小、说明文字隐藏，把空间留给右上角操作 */
+  .dshws-head { flex-wrap: nowrap; }
+  .dshws-head-text { flex: 1 1 0; min-width: 0; }
+  .dshws-title { font-size: 18px; }
+  .dshws-intro { display: none; }
+  /* 3. 页签横向滚动、不换行（只作用于 role="tab" 的按钮，避免宿主 Switch 被套样式） */
+  .dshws-sections { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .dshws-sections::-webkit-scrollbar { display: none; }
+  .dshws-sections > button[role="tab"] { flex: 0 0 auto; }
+  /* 4. 主机行不换行、整卡左右滑动（桌面仍是 wrap + 无横向滚动） */
+  .dshws-hostlist { overflow-x: auto; overflow-y: hidden; }
+  .dshws-host { flex-wrap: nowrap; min-width: 560px; }
+  /* 5. 文件页：树 / 预览改单列，工具条元素占满整行 */
+  .dshws-files-body { grid-template-columns: 1fr; }
+  .dshws-files-path { min-width: 0; }
+  .dshws-files-search { width: 100%; }
+  .dshws-upload-name { width: auto; flex: 1 1 120px; }
+  /* 5b. 预览改全屏浮层：未选文件时整块不占位，选中后铺满本页（absolute，不盖宿主头部） */
+  .dshws-preview { display: none; }
+  .dshws-preview[data-open="true"] {
+    display: flex; position: absolute; inset: 0; z-index: 3200;
+    padding: 8px 12px 12px; background: var(--dsw-alias-bg-layer-1);
+  }
+  .dshws-preview[data-open="true"] .dshws-preview-head { flex-wrap: wrap; }
+  /* 5c. 编辑器顶部那行「大小 · 权限 · 修改时间」在手机上太挤，隐藏（桌面保留） */
+  .dshws-preview[data-open="true"] .dshws-preview-head .dshws-tree-meta { display: none; }
+  /* 6. 表单 / 关于信息单列 */
+  .dshws-grid { grid-template-columns: 1fr; }
+  .dshws-kv { grid-template-columns: 1fr; }
+  /* 7. 添加工作区弹窗：左栏位置列表改上下排列并限高，保证下方目录列表可见 */
+  .dshws-pk { grid-template-columns: 1fr; }
+  .dshws-pk-rail { max-height: 38vh; }
+  /* 7b. 单列后高度改成「一屏之内」：弹窗整体不超过视口，各块内部自己滚动（桌面仍是固定高度） */
+  .dshws-picker { max-height: calc(100dvh - 16px); }
+  /* 必须是「确定高度 + 纵向 flex」：原先 grid + height:auto 时，下方行按内容撑高、被 .dshws-pk 的 overflow 裁掉，
+   * .dshws-fb-list 永远拿不到有限高度，于是不能滚动、只露出前几行（进盘符后尤其明显） */
+  .dshws-pk { display: flex; flex-direction: column; height: max(240px, min(52dvh, calc(100dvh - 330px))); max-height: none; min-height: 0; }
+  .dshws-pk-rail { flex: 0 0 auto; max-height: 20dvh; border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+  .dshws-pk-main { flex: 1 1 0; min-height: 0; }
+  .dshws-fb-list { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+  .dshws-pk-bottom { flex-shrink: 0; }
+  /* 7c. 名称/路径这类「标签 + 输入框」行：标签不占固定 48px，把宽度让给输入框 */
+  .dshws-add-row > span { width: auto; }
+  /* 7d. 弹窗底栏竖排：左右两组各占一行，按钮不会再被挤到屏幕外 */
+  .dshws-pk-footer { flex-direction: column; align-items: stretch; }
+  .dshws-pk-footer > * { width: 100%; }
+  .dshws-pk-footer-left { flex-wrap: wrap; }
+  /* 8. 日志行允许换行，固定列宽改成自适应 */
+  .dshws-log-row { flex-wrap: wrap; }
+  .dshws-log-level, .dshws-log-stage { width: auto; }
+  /* 9. 弹窗底栏按钮：窄屏允许换行并均分宽度（只命中真实存在的容器类，宿主 Button 没有稳定类名） */
+  .dshws-dialog-actions { flex-wrap: wrap; }
+  .dshws-dialog-actions > button, .dshws-footer > button { flex: 1 1 auto; }
+  .dshws-footer { flex-wrap: wrap; }
+}
 `
 
 /** 注入样式（本插件样式 + xterm 样式），返回移除函数（交给 ctx.effect 管理生命周期）。 */

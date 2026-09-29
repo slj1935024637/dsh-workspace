@@ -57,7 +57,8 @@ export function Segment<T extends string>(props: {
 
 // ------------------------------------------------------------------ 认证
 
-export type AuthKind = 'inherit' | AuthInput['kind']
+// 表单不再提供 SSH Agent；底层仍保留该类型（旧数据要能读）。
+export type AuthKind = 'inherit' | Exclude<AuthInput['kind'], 'agent'>
 
 /** 认证区块的草稿态。凭据字段只在用户输入时才有值（空串 = 沿用已保存的）。 */
 export interface AuthDraft {
@@ -70,8 +71,12 @@ export interface AuthDraft {
 }
 
 export function authDraftFrom(view: HostAuthView | null | undefined): AuthDraft {
+  // 不再提供「SSH Agent」：旧数据里 agent 认证的主机按「密码」展示。
+  // 只改展示方式，不动数据 —— 未改动认证区块时保存不会改动它的 auth。
+  const kind: AuthKind =
+    view === null || view === undefined ? 'inherit' : view.kind === 'agent' ? 'password' : view.kind
   return {
-    kind: view === null || view === undefined ? 'inherit' : view.kind,
+    kind,
     password: '',
     keyPath: view?.keyPath ?? '',
     keyContent: '',
@@ -106,8 +111,6 @@ export function authInputFrom(draft: AuthDraft, touched: boolean): AuthInput | n
         ...(draft.passphrase !== '' ? { passphrase: draft.passphrase } : {}),
         ...(draft.clearPassphrase ? { clearPassphrase: true } : {})
       }
-    case 'agent':
-      return { kind: 'agent' }
   }
 }
 
@@ -130,8 +133,7 @@ export function AuthFields(props: {
     ...(props.allowInherit ? [{ value: 'inherit' as const, label: t('form.authInherit') }] : []),
     { value: 'password', label: t('form.authPassword') },
     { value: 'keyPath', label: t('form.authKeyPath') },
-    { value: 'keyContent', label: t('form.authKeyContent') },
-    { value: 'agent', label: t('form.authAgent') }
+    { value: 'keyContent', label: t('form.authKeyContent') }
   ]
 
   return (

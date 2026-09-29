@@ -11,6 +11,7 @@ import { WorkspacePage } from './page/WorkspacePage.js'
 import { AddWorkspaceFlow } from './workspace/AddWorkspaceFlow.js'
 import { registerRemoteSidebar } from './sidebar/register.js'
 import { onTakeoverChange } from './workspace/takeover.js'
+import { closeBridgeDrawer, holdSlotHead, shieldAddWorkspaceClicks, type SlotsPeek } from './workspace/bridge-compat.js'
 
 export const name = 'dsh-workspace'
 
@@ -25,6 +26,23 @@ export const inject = ['slots', 'locale', 'remote']
 
 /** 左侧入口行 id 与主区页面 key，两者必须一致（选中缺失 key 宿主会直接抛错）。 */
 const PANEL_ID = 'dsh-workspace'
+
+/**
+ * 移动端进入本页时把左侧抽屉收起来。
+ * 宿主只在「会话导航」时自动收抽屉，main 插槽的全局面板不会 —— 抽屉会一直盖在内容上。
+ * 判据：viewport < 1024（宿主同款断点）且 shell 未标记 [data-sidebar-collapsed]
+ * （宿主是收起时才写这个属性，没写就说明抽屉正开着）；layout 服务取不到就静默跳过。
+ */
+function collapseNarrowDrawer(ctx: ClientContext): void {
+  if (typeof window === 'undefined' || window.innerWidth >= 1024) return
+  // 装了 dsh-bridge 时，手机上的抽屉容器是它用 body.dsh-drawer-open 控制的覆盖层，宿主 toggleSidebar 不会同步它：
+  // 只收宿主会出现「图标收成窄栏、抽屉容器还开着」。两边都要收。
+  closeBridgeDrawer()
+  if (typeof document !== 'undefined' && document.querySelector('[data-sidebar-collapsed]') !== null) return
+  const layout = ctx.get('layout') as { toggleSidebar?: () => void } | undefined
+  if (typeof layout?.toggleSidebar !== 'function') return
+  layout.toggleSidebar()
+}
 
 /**
  * 侧栏排序：宿主「插件」行为 0，技能面板 1，MCP 面板 2。
@@ -62,7 +80,7 @@ export function apply(ctx: ClientContext): void {
     layout?.selectPanel?.(null)
   }
 
-  const face = () => ({ t, api, backToConversation })
+  const face = () => ({ t, api, backToConversation, onEnter: () => collapseNarrowDrawer(ctx) })
 
   ctx.slots.inject('sidebar.panellist', () =>
     ctx.slots.register(
@@ -129,26 +147,50 @@ export function apply(ctx: ClientContext): void {
 }
 
 /**
- * 侧栏的「添加工作区」（含快捷键，桌面 Ctrl+O / 网页 Ctrl+Alt+O）与首页入口是两个插槽，都要占。
- * priority -200：比 dsh-bridge（-10）与已停用的 dsh-remote（-100）都小；同一插槽同 priority 会直接报错，
- * 所以避开它们。组件崩溃时宿主会让位给下一个占用者，不会导致无法添加工作区。
+ * 侧栏的「添加工作区」（含快捷键，桌面 Ctrl+O / 网页 Ctrl+Alt+O）与首页入口是两个 single 插槽，都要占。
+ * 宿主对 single 插槽的规则是「priority 数值最小者渲染」（dsh-client-ui-slots：lowest renders），同 priority 直接抛错。
+ * ⚠️ 本插件是动态包：运行器会把传入的 priority 改写成页内递减计数，-1000 只在静态加载时才生效，
+ * 所以真正保证赢过 dsh-bridge（-10）的是 holdSlotHead 的「不是 head 就重注册」。
+ * 公网访问时 dsh-bridge 还会在 document 捕获阶段截走按钮点击，由 shieldAddWorkspaceClicks 中和（见 bridge-compat.ts）。
+ * 注册回调里抛错会被宿主吞成微任务异常（表现成「只有接管静默失效」），因此逐个 try/catch。
  */
 const ADD_WORKSPACE_SLOTS = ['sidebar.workspaces.directoryFlow', 'conversation.hero.workspace.directoryFlow']
-const ADD_WORKSPACE_PRIORITY = -200
+const ADD_WORKSPACE_PRIORITY = -1000
 
 function registerAddWorkspace(ctx: ClientContext, t: Translate, api: ReturnType<typeof createApi>): () => void {
   const inject = () => ({
     t,
     api,
     workspaces: () => ctx.get('workspaces'),
-    uiWorkspace: () => ctx.get('uiWorkspace')
+    uiWorkspace: () => ctx.get('uiWorkspace'),
+    // 手机上从抽屉里点开弹窗时抽屉不会自己收起，会压在弹窗后面。
+    // 宿主在窄栏（rail）模式下仍挂着 WorkspacePickFlow，收起抽屉不会卸载弹窗。
+    onShown: () => collapseNarrowDrawer(ctx)
   })
-  const disposers = ADD_WORKSPACE_SLOTS.map((slot) =>
-    ctx.slots.inject(slot, () =>
-      ctx.slots.register({ name: slot, priority: ADD_WORKSPACE_PRIORITY, inject }, AddWorkspaceFlow as never)
-    )
-  )
+  const disposers = ADD_WORKSPACE_SLOTS.map((slot) => {
+    try {
+      return ctx.slots.inject(slot, () => {
+        try {
+          return holdSlotHead(
+            ctx.slots as unknown as SlotsPeek,
+            slot,
+            () => ctx.slots.register({ name: slot, priority: ADD_WORKSPACE_PRIORITY, inject }, AddWorkspaceFlow as never),
+            AddWorkspaceFlow,
+            (message) => console.warn(`[dsh-workspace] ${message}`)
+          )
+        } catch (error) {
+          console.warn(`[dsh-workspace] 接管「添加工作区」失败（${slot}）`, error)
+          return () => undefined
+        }
+      })
+    } catch (error) {
+      console.warn(`[dsh-workspace] 注入「添加工作区」插槽失败（${slot}）`, error)
+      return () => undefined
+    }
+  })
+  const unshield = shieldAddWorkspaceClicks()
   return () => {
+    unshield()
     for (const dispose of disposers) dispose()
   }
 }

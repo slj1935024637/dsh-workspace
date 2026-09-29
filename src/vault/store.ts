@@ -554,6 +554,9 @@ function encryptAuth(auth: HostAuth, key: Buffer | null): StoredAuth {
       }
     case 'agent':
       return { kind: 'agent' }
+    default:
+      // 兜底：未知 kind（脏数据 / 未来新增）不能静默变成 undefined。
+      throw new Error(`不支持的认证方式：${(auth as { kind: string }).kind}`)
   }
 }
 
@@ -575,6 +578,9 @@ function decryptAuth(stored: StoredAuth, key: Buffer): HostAuth {
       }
     case 'agent':
       return { kind: 'agent' }
+    default:
+      // 兜底：未知 kind 不能静默变成 undefined（调用方会把结果当 HostAuth 用）。
+      throw new Error(`不支持的认证方式：${(stored as { kind: string }).kind}`)
   }
 }
 
@@ -589,6 +595,9 @@ function blankAuth(stored: StoredAuth): HostAuth {
       return { kind: 'keyContent', keyContent: '' }
     case 'agent':
       return { kind: 'agent' }
+    default:
+      // 兜底：未知 kind 不能静默变成 undefined（调用方会把结果当 HostAuth 用）。
+      throw new Error(`不支持的认证方式：${(stored as { kind: string }).kind}`)
   }
 }
 
@@ -608,6 +617,9 @@ function viewAuth(stored: StoredAuth | undefined): HostAuthView | null {
       return { kind: 'keyContent', hasSecret: true, hasPassphrase: stored.passphrase !== undefined }
     case 'agent':
       return { kind: 'agent', hasSecret: false, hasPassphrase: false }
+    default:
+      // 兜底：未知 kind 以前会返回 undefined，导致 host.auth.kind 解引用时整页崩。
+      return null
   }
 }
 

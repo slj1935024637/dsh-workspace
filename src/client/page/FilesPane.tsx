@@ -24,6 +24,7 @@ import {
   type UploadHandle
 } from '../files/transfer.js'
 import { messageOf, type WorkspaceModel } from './useWorkspace.js'
+import { useNarrow } from '../narrow.js'
 import { fileNameProblem, useDialogs } from './dialogs.js'
 import { CodeEditor } from '../files/CodeEditor.js'
 import { EmptyState, FileIcon, IconArrowUp, IconDoc, IconFolder, IconSubmodule } from '../sidebar/ui.js'
@@ -64,6 +65,8 @@ export function FilesPane(props: FilesPaneProps) {
   const call = props.model.call
   const requestUnlock = props.model.requestUnlock
   const dialogs = useDialogs()
+  /** 窄屏（手机）：预览不再占右侧一列，改成全屏浮层（见 styles.ts 的窄屏段）。 */
+  const narrow = useNarrow()
   const badName = fileNameProblem(t)
 
   const [root, setRoot] = useState<string | null>(null)
@@ -226,6 +229,13 @@ export function FilesPane(props: FilesPaneProps) {
   const reloadPreview = async (): Promise<void> => {
     if (selected === null || !(await confirmDiscard())) return
     await openPreview(selected, { force: true })
+  }
+
+  /** 关闭窄屏的全屏预览浮层：有未保存修改时先确认（编辑器仍在，重新点文件即可再打开）。 */
+  const closePreview = async (): Promise<void> => {
+    if (!(await confirmDiscard())) return
+    setPreview(null)
+    setDirty(false)
   }
 
   const isDir = (e: RemoteEntry): boolean => e.type === 'dir' || e.linkIsDir === true
@@ -663,7 +673,8 @@ export function FilesPane(props: FilesPaneProps) {
               )}
             </div>
 
-            <div className="dshws-preview">
+            {/* 窄屏下这块变成全屏浮层：data-open 决定是否铺满（见 styles.ts 窄屏段） */}
+            <div className="dshws-preview" data-open={preview !== null}>
               {preview === null ? (
                 <EmptyState icon={<IconDoc size={28} />} text={t('files.previewHint')} />
               ) : preview.loading ? (
@@ -698,6 +709,11 @@ export function FilesPane(props: FilesPaneProps) {
                         onClick={() => void saveRef.current?.().catch(() => undefined)}
                       >
                         {saving ? t('form.saving') : t('form.save')}
+                      </Button>
+                    ) : null}
+                    {narrow ? (
+                      <Button size="sm" variant="outline" onClick={() => void closePreview()}>
+                        {t('common.close')}
                       </Button>
                     ) : null}
                   </div>

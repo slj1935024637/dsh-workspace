@@ -109,7 +109,6 @@ const zh: Record<string, string> = {
   'form.authPassword': '密码',
   'form.authKeyPath': '私钥文件',
   'form.authKeyContent': '粘贴私钥',
-  'form.authAgent': 'SSH Agent',
   'form.password': '密码',
   'form.keyPath': '私钥路径',
   'form.keyPathPlaceholder': '例如 C:\\Users\\me\\.ssh\\id_ed25519',
@@ -174,6 +173,11 @@ const zh: Record<string, string> = {
 
   // 全局配置 / 关于
   'settings.general': '通用',
+  // 保险箱操作区（原来在头部的「上锁 / 更多」）
+  'settings.vault': '保险箱',
+  'settings.vaultLockHint': '锁定后需要重新输入主密码才能连接、测试或修改凭据。',
+  'settings.vaultChangeHint': '用原主密码换一个新主密码，已保存的凭据会重新加密。',
+  'settings.vaultImportHint': '从导出的 JSON 备份恢复主机与分组。',
   'settings.autoUnlockNeedsVault': '请先设置主密码。',
   'settings.autoUnlockPlain': '当前系统没有 DPAPI，记住的密钥以仅本用户可读的文件保存。',
   'about.title': '关于',
@@ -528,7 +532,6 @@ const en: Record<string, string> = {
   'form.authPassword': 'Password',
   'form.authKeyPath': 'Key file',
   'form.authKeyContent': 'Paste key',
-  'form.authAgent': 'SSH agent',
   'form.password': 'Password',
   'form.keyPath': 'Key path',
   'form.keyPathPlaceholder': 'e.g. ~/.ssh/id_ed25519',
@@ -587,6 +590,11 @@ const en: Record<string, string> = {
   'section.settings': 'Settings',
 
   'settings.general': 'General',
+  // Vault actions (these used to live in the header as "Lock" / "More")
+  'settings.vault': 'Vault',
+  'settings.vaultLockHint': 'After locking, the master password is required again to connect, test or edit credentials.',
+  'settings.vaultChangeHint': 'Replace the master password with a new one; saved credentials are re-encrypted.',
+  'settings.vaultImportHint': 'Restore hosts and groups from an exported JSON backup.',
   'settings.autoUnlockNeedsVault': 'Set a master password first.',
   'settings.autoUnlockPlain': 'DPAPI is not available on this system; the remembered key is stored in a file readable only by the current user.',
   'about.title': 'About',

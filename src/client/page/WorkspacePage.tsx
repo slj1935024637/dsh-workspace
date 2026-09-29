@@ -3,8 +3,8 @@
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/WorkspacePage.tsx
  */
-import { useMemo, useRef, useState } from 'react'
-import { Button, Menu, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconChevronLeft, IconPlus } from '../icons.js'
 import type { HostView } from '../../types.js'
 import type { WorkspaceApi } from '../api.js'
@@ -32,6 +32,8 @@ export interface WorkspacePageProps {
   t: Translate
   api: WorkspaceApi
   backToConversation: () => void
+  /** 进入本页时的回调（移动端用来收起宿主左侧抽屉）；预览替身不传。 */
+  onEnter?: () => void
 }
 
 type HostDialog = { mode: 'closed' } | { mode: 'new'; group?: string } | { mode: 'edit'; host: HostView }
@@ -52,6 +54,12 @@ function WorkspacePageInner(props: WorkspacePageProps) {
   const state = model.state
   const dialogs = useDialogs()
 
+  // 移动端：进入本页时收起宿主左侧抽屉（宿主只对会话导航这么做）。只在挂载时跑一次。
+  useEffect(() => {
+    props.onEnter?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const [section, setSection] = useState<Section>('hosts')
   const [activeTerminal, setActiveTerminal] = useState<string | null>(null)
   const [opening, setOpening] = useState<string | null>(null)
@@ -64,10 +72,8 @@ function WorkspacePageInner(props: WorkspacePageProps) {
   const [hostDialog, setHostDialog] = useState<HostDialog>({ mode: 'closed' })
   const [groupDialog, setGroupDialog] = useState<GroupDialog>({ mode: 'closed' })
   const [changingPassword, setChangingPassword] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [enablingAutoUnlock, setEnablingAutoUnlock] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
-  const importRef = useRef<HTMLInputElement>(null)
 
   const hosts = state?.hosts ?? []
   const groups = state?.groups ?? []
@@ -203,52 +209,11 @@ function WorkspacePageInner(props: WorkspacePageProps) {
         <span>{t('back')}</span>
       </button>
 
+      {/* 头部只留标题与简介：「上锁」「更多」（改主密码 / 导出 / 导入）都在「全局配置」页签里 */}
       <div className="dshws-head">
         <div className="dshws-head-text">
           <h2 className="dshws-title">{t('title')}</h2>
           <p className="dshws-intro">{t('intro')}</p>
-        </div>
-        <div className="dshws-head-actions">
-          {/* 「接管添加工作区」「自动解锁」等开关在「全局配置」页签里 */}
-          {state?.unlocked === true ? (
-            <Button size="sm" variant="outline" onClick={() => void model.call('lock', {}).catch(report)}>
-              {t('vault.lock')}
-            </Button>
-          ) : null}
-          <Menu
-            open={menuOpen}
-            align="end"
-            portal
-            anchor={
-              <Button size="sm" variant="outline" onClick={() => setMenuOpen(!menuOpen)}>
-                {t('common.more')}
-              </Button>
-            }
-            items={[
-              { id: 'change', label: t('vault.change'), disabled: state?.initialized !== true },
-              { type: 'separator' },
-              { id: 'export', label: t('vault.export'), disabled: state?.unlocked !== true },
-              { id: 'import', label: t('vault.import'), disabled: state?.unlocked !== true }
-            ]}
-            onClose={() => setMenuOpen(false)}
-            onSelect={(id) => {
-              setMenuOpen(false)
-              if (id === 'change') setChangingPassword(true)
-              if (id === 'export') void exportVault()
-              if (id === 'import') importRef.current?.click()
-            }}
-          />
-          <input
-            ref={importRef}
-            type="file"
-            accept="application/json,.json"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              e.target.value = ''
-              if (file !== undefined) void importVault(file)
-            }}
-          />
         </div>
       </div>
 
@@ -426,6 +391,12 @@ function WorkspacePageInner(props: WorkspacePageProps) {
               t={t}
               call={model.call}
               autoUnlock={state?.initialized === true ? state.autoUnlock : null}
+              // 原来在头部「上锁 / 更多」里的四件事，统一放到这里
+              vault={{ initialized: state?.initialized === true, unlocked: state?.unlocked === true }}
+              onLock={() => void model.call('lock', {}).catch(report)}
+              onChangePassword={() => setChangingPassword(true)}
+              onExport={() => void exportVault()}
+              onImport={(file) => void importVault(file)}
               // 开启要再确认一次主密码；关闭直接删掉本机记住的密钥。
               onEnableAutoUnlock={() => setEnablingAutoUnlock(true)}
               onDisableAutoUnlock={() =>

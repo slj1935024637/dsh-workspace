@@ -71,6 +71,8 @@ export interface AddWorkspaceFlowProps {
   api: WorkspaceApi
   workspaces: () => WorkspacesController | undefined
   uiWorkspace: () => UiWorkspace | undefined
+  /** 弹窗出现后调用（移动端用来收起左侧抽屉）。 */
+  onShown?(): void
 }
 
 type Source = { kind: 'local' } | { kind: 'remote'; hostId: string }
@@ -207,6 +209,12 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
     }
     reported.current = false
     setVisible(true)
+    // 收抽屉失败不能影响弹窗本身。
+    try {
+      latest.current.onShown?.()
+    } catch (err) {
+      console.warn('[dsh-workspace] 收起抽屉失败', err)
+    }
     setError(null)
     setPath(undefined)
     setTitle('')

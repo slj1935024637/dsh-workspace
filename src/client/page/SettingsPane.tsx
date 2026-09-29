@@ -6,8 +6,8 @@
  * 宿主 Switch 只把 label 当 aria-label、不显示文字（它本身是 <button role="switch">），
  * 所以每行的标题与说明自己画在左侧，开关在右侧。
  */
-import { useEffect, useState, type ReactNode } from 'react'
-import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Translate } from '../context.js'
 import { LINKS, VERSION } from '../build-info.js'
 import { emitTakeoverChange } from '../workspace/takeover.js'
@@ -18,6 +18,12 @@ export interface SettingsPaneProps {
   call: ReturnType<typeof useWorkspace>['call']
   /** 保险箱尚未初始化时为 null（自动解锁不可用）。 */
   autoUnlock: { enabled: boolean; scheme: string } | null
+  /** 保险箱状态：原来决定头部「上锁 / 更多」是否显示的判断。 */
+  vault: { initialized: boolean; unlocked: boolean }
+  onLock(): void
+  onChangePassword(): void
+  onExport(): void
+  onImport(file: File): void
   /** 开启自动解锁：由页面弹出确认主密码的对话框。 */
   onEnableAutoUnlock(): void
   onDisableAutoUnlock(): void
@@ -51,6 +57,7 @@ function ExternalLink(props: { href: string; children: ReactNode }) {
 export function SettingsPane(props: SettingsPaneProps) {
   const { t } = props
   const [takeover, setTakeover] = useState<boolean | null>(null)
+  const importRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     void props.call('getPrefs', {}).then((p) => setTakeover(p.takeoverAddWorkspace), props.onError)
@@ -74,9 +81,71 @@ export function SettingsPane(props: SettingsPaneProps) {
   }
 
   const autoUnlock = props.autoUnlock
+  const vault = props.vault
 
   return (
     <div className="dshws-settings">
+      {/* 保险箱：原来是头部的「上锁」按钮与「更多」菜单（改主密码 / 导出 / 导入） */}
+      <section className="dshws-set-card">
+        <div className="dshws-section-title">{t('settings.vault')}</div>
+        <SettingRow
+          title={t('vault.lock')}
+          desc={t('settings.vaultLockHint')}
+          disabled={!vault.unlocked}
+          control={
+            <Button size="sm" variant="outline" disabled={!vault.unlocked} onClick={props.onLock}>
+              {t('vault.lock')}
+            </Button>
+          }
+        />
+        <SettingRow
+          title={t('vault.change')}
+          desc={t('settings.vaultChangeHint')}
+          disabled={!vault.initialized}
+          control={
+            <Button size="sm" variant="outline" disabled={!vault.initialized} onClick={props.onChangePassword}>
+              {t('vault.change')}
+            </Button>
+          }
+        />
+        <SettingRow
+          title={t('vault.export')}
+          desc={t('vault.exportWarn')}
+          disabled={!vault.unlocked}
+          control={
+            <Button size="sm" variant="outline" disabled={!vault.unlocked} onClick={props.onExport}>
+              {t('vault.export')}
+            </Button>
+          }
+        />
+        <SettingRow
+          title={t('vault.import')}
+          desc={t('settings.vaultImportHint')}
+          disabled={!vault.unlocked}
+          control={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!vault.unlocked}
+              onClick={() => importRef.current?.click()}
+            >
+              {t('vault.import')}
+            </Button>
+          }
+        />
+        <input
+          ref={importRef}
+          type="file"
+          accept="application/json,.json"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            e.target.value = ''
+            if (file !== undefined) props.onImport(file)
+          }}
+        />
+      </section>
+
       <section className="dshws-set-card">
         <div className="dshws-section-title">{t('settings.general')}</div>
         <SettingRow
