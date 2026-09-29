@@ -168,6 +168,8 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
   return (
     <Split
       list={list}
+      storageKey="files"
+      resizeLabel={t('side.resizeList')}
       onWideChange={(w) => {
         wideRef.current = w
       }}

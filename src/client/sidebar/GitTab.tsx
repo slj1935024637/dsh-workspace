@@ -624,7 +624,7 @@ export function GitTab(props: SidebarBodyProps) {
     </div>
   )
 
-  return <Split list={list} detail={detail} placeholder={<EmptyState icon={<IconCommit size={30} />} text={t('git.pickItem')} />} />
+  return <Split list={list} detail={detail} storageKey="git" resizeLabel={t('side.resizeList')} placeholder={<EmptyState icon={<IconCommit size={30} />} text={t('git.pickItem')} />} />
 }
 
 // ------------------------------------------------------------------ 改动

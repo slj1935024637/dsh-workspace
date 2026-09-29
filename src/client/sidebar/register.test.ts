@@ -11,7 +11,7 @@ vi.mock('./RemoteFileTab.js', () => ({ RemoteFileTab: () => null }))
 vi.mock('./GitTab.js', () => ({ GitTab: () => null }))
 import { registerConversationTabs, registerRemoteSidebar } from './register.js'
 import { RemoteIndex } from './remote-index.js'
-import { isWide } from './Split.js'
+import { DETAIL_MIN_WIDTH, LIST_MIN_WIDTH, clampListWidth, defaultListWidth, isWide } from './Split.js'
 import { sessionFileAddress } from './remote-index.js'
 
 const ws = { localPath: 'C:\\ph\\app', hostId: 'h1', remotePath: '/srv/app', title: 'app' }
@@ -145,6 +145,22 @@ describe('isWide', () => {
   it('700px 起分栏', () => {
     expect(isWide(699)).toBe(false)
     expect(isWide(700)).toBe(true)
+  })
+})
+
+describe('分栏列表宽度', () => {
+  it('默认 = 容器 40%，限制在 300–520px', () => {
+    expect(defaultListWidth(700)).toBe(300)
+    expect(defaultListWidth(1000)).toBe(400)
+    expect(defaultListWidth(2000)).toBe(520)
+  })
+  it('不小于最小宽度，且给右侧留出最小内容宽度', () => {
+    expect(clampListWidth(100, 1000)).toBe(LIST_MIN_WIDTH)
+    expect(clampListWidth(900, 1000)).toBe(1000 - DETAIL_MIN_WIDTH)
+    expect(clampListWidth(450, 1000)).toBe(450)
+  })
+  it('容器太窄、两者冲突时以列表最小宽度为准', () => {
+    expect(clampListWidth(500, 500)).toBe(LIST_MIN_WIDTH)
   })
 })
 
