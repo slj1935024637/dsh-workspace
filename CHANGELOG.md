@@ -4,6 +4,9 @@
 
 ## 未发布
 
+- 适配 DSH 0.2.0-rc.1 内核：`peerDependencies` 里 `@deepseek-ai/dsh-*` 的范围由 `^0.1.5-rc.2` 改为 `^0.1.5-rc.2 || ^0.2.0-rc.1`（旧内核仍可安装；0.2.x 内核不再被宿主判定为不兼容而禁用插件）
+- 开发依赖（`@deepseek-ai/*`）同步升到 0.2.0-rc.1，README 的依赖表注明同时兼容 0.1.x / 0.2.x
+
 ## 0.8.0（2026-09-29）
 
 - 包名由 `dsh-workspace` 改为 `@yh4922/dsh-workspace`（npm 上原名已被他人占用）；`cordis.patch.yml` 里 insert 的 name 必须与包名一致（否则插件加载不到），远程清单的身份名 `PACKAGE` 也一并对齐

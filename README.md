@@ -18,7 +18,7 @@ DeepSeek Harness（DSH）的远程工作区插件：在 DSH 里管理 SSH 主机
 
 | 依赖 | 说明 |
 | --- | --- |
-| DSH | `>= 0.1.5-rc.2`（开发基于 DSH Desktop 2.0.15 / 宿主 0.1.7-rc.2） |
+| DSH | `>= 0.1.5-rc.2`（同时兼容 0.1.x 与 0.2.x；开发基于 DSH Desktop 2.0.16 / 宿主 0.2.0-rc.1） |
 | Node.js | `>= 20` |
 | [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（npm 包 `dsh-better-sidebar`） | **侧边栏相关功能依赖这个插件**（右侧栏里的远程文件、远程 Git、SSH 终端）。请先安装并启用它 |
 

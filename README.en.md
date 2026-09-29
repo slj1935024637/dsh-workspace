@@ -18,7 +18,7 @@ A remote workspace plugin for DeepSeek Harness (DSH). It manages SSH hosts insid
 
 | Requirement | Notes |
 | --- | --- |
-| DSH | `>= 0.1.5-rc.2` (developed against DSH Desktop 2.0.15 / host 0.1.7-rc.2) |
+| DSH | `>= 0.1.5-rc.2` (both 0.1.x and 0.2.x; developed against DSH Desktop 2.0.16 / host 0.2.0-rc.1) |
 | Node.js | `>= 20` |
 | [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) (npm package `dsh-better-sidebar`) | **The sidebar features depend on this plugin** (remote files, remote Git and SSH terminal in the right sidebar). Install and enable it first |
 
