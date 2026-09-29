@@ -1,9 +1,17 @@
 {
   "name": "dsh-workspace",
-  "version": "0.7.3",
+  "version": "0.7.6",
   "description": "Remote workspace for DeepSeek Harness: SSH host vault (groups, jump chains, proxy, encrypted credentials), interactive SSH terminal, SFTP explorer, remote workspace binding, and session-scoped remote agent tools.",
   "license": "MIT",
   "author": "YangHeng",
+  "homepage": "https://github.com/yh4922/dsh-workspace#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yh4922/dsh-workspace.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yh4922/dsh-workspace/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -26,7 +34,8 @@
     "!src/**/*.test.ts",
     "cordis.patch.yml",
     "README.md",
-    "README.en.md"
+    "README.en.md",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
@@ -121,6 +130,8 @@
     "test:it": "vitest run src/ssh/integration.test.ts --testTimeout=60000",
     "test:e2e": "node scripts/e2e-terminal.mjs",
     "check:host": "node scripts/check-host-resolution.mjs",
-    "build:monaco": "node scripts/build-monaco.mjs"
+    "build:monaco": "node scripts/build-monaco.mjs",
+    "pack:dev": "node scripts/pack-dev.mjs",
+    "release": "node scripts/release.mjs"
   }
 }
