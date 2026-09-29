@@ -62,8 +62,9 @@ dsh plugin --profile <profile> remove dsh-workspace
 1. Open "Remote workspace" from the left sidebar and set a master password on first use
 2. Create a host (optionally in a group) and click "Test connection"
 3. Use the Hosts / Files / Terminals / Connection log tabs to manage hosts, browse files and open terminals
-4. Click DSH's "Add workspace" (the "Take over Add workspace" switch at the top right of the management page must be on), pick a remote host and folder to create a remote workspace
+4. Click DSH's "Add workspace" ("Take over Add workspace" in the Settings tab must be on; it is on by default), pick a remote host and folder to create a remote workspace
 5. In a remote workspace session, open "Remote files", "Remote Git" and "SSH terminal" from the right sidebar
+6. The Settings tab also has the auto-unlock switch, version info and links such as the [changelog](./CHANGELOG.md) (in Chinese)
 
 ## Development
 
@@ -76,6 +77,16 @@ pnpm build
 
 - Integration tests against real hosts are skipped by default; set `DSHWS_IT=1` and provide the test host through environment variables, then run `pnpm test:it`
 - The build scripts (`scripts/`) are not in the repository yet, so a fresh clone cannot run the full `pnpm build`
+
+### Packaging and releasing
+
+| Command | Purpose |
+| --- | --- |
+| `npm run pack:dev` | Development package: version is "next patch-dev.timestamp", kept only in the local `pack/`; `package.json` is not changed and nothing is pushed |
+| `npm run release -- [patch\|minor\|major]` | Release: bump the version, finalize the "未发布" (Unreleased) section of `CHANGELOG.md`, build and pack, commit and push the tag, create a GitHub Release with the package attached |
+| `npm run release -- --dry-run --allow-dirty` | Rehearsal: checks, builds and packs only; nothing is committed or pushed, and files are restored afterwards |
+
+Before releasing: be on `main` with no uncommitted changes, in sync with the remote, and with the release notes written under "未发布".
 
 ## Security
 
