@@ -1,6 +1,6 @@
 {
   "name": "dsh-workspace",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "Remote workspace for DeepSeek Harness: SSH host vault (groups, jump chains, proxy, encrypted credentials), interactive SSH terminal, SFTP explorer, remote workspace binding, and session-scoped remote agent tools.",
   "license": "MIT",
   "author": "YangHeng",
