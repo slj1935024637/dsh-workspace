@@ -6,8 +6,9 @@
 import { readFileSync } from 'node:fs'
 import { defineConfig } from 'tsdown'
 
-/** 浏览器端「关于」显示的版本号：打包时从 package.json 注入（见 src/client/build-info.ts）。 */
-const VERSION = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version
+/** 打包时从 package.json 现读：version 注入「关于」页（见 src/client/build-info.ts），name 决定浏览器 bundle 的 ModuleLoader id。 */
+const PKG = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { name: string; version: string }
+const VERSION = PKG.version
 
 /**
  * 浏览器端只能 require 宿主外壳提供的这几个「种子」模块。
@@ -26,11 +27,11 @@ const CLIENT_SEEDS = [
  * 宿主从 /plugins/<包名>/client.js 下发浏览器 bundle，要求它是一次
  * `window.__ModuleLoader__.load({ id, factory })` 调用：factory 拿到受限的 require，
  * 返回模块导出。这里把 CJS 产物夹在 banner / footer 之间得到该形态。
- * id 必须与 package.json 的 name 一致。
+ * id 必须与 package.json 的 name 一致（宿主按包名核对；对不上会 "loaded without registering" 并让 DSH 启动失败）。
  */
 const CLIENT_BANNER = [
   'window.__ModuleLoader__.load({',
-  '  id: "dsh-workspace",',
+  `  id: ${JSON.stringify(PKG.name)},`,
   '  factory: (require) => {',
   '    var module = { exports: {} };',
   '    var exports = module.exports;',
