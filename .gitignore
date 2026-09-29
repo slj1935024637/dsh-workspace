@@ -1,0 +1,23 @@
+# 依赖
+node_modules/
+
+# 编译产物 / 打包产物
+lib/
+pack/
+*.tgz
+*.tsbuildinfo
+# 构建时由 scripts/gen-xterm-css.cjs 生成
+src/client/terminal/xterm-css.generated.ts
+
+# 本地文档、预览截图、任务记录、辅助脚本（不入库）
+.docs/
+.preview/
+.tasks/
+scripts/
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log

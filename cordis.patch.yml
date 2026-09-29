@@ -1,0 +1,8 @@
+# dsh-workspace bundle patch：只把本插件插入 profile 的 layer stack。
+#
+# dsh-better-sidebar 刻意不在此挂载，也不是依赖。
+# 侧边栏 tab 由 lib/client.js 通过 ctx.get('betterSidebar') 动态探测，
+# 该服务存在时才注册，缺失则静默降级（主机管理页面与工作区能力不受影响）。
+- insert:
+    - id: dsh-workspace
+      name: 'dsh-workspace'

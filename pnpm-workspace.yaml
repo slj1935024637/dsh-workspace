@@ -1,0 +1,9 @@
+nodeLinker: hoisted
+autoInstallPeers: false
+
+# pnpm 11 的 strict-dep-builds 默认拦截原生依赖的构建脚本。
+# ssh2 与其可选加速依赖 cpu-features 都需要构建，不放行会导致运行时加载失败。
+# 消费本插件的 profile 也必须有同样的配置（见 README 安装说明）。
+allowBuilds:
+  cpu-features: true
+  ssh2: true
