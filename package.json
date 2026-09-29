@@ -1,5 +1,5 @@
 {
-  "name": "dsh-workspace",
+  "name": "@yh4922/dsh-workspace",
   "version": "0.7.7",
   "description": "Remote workspace for DeepSeek Harness: SSH host vault (groups, jump chains, proxy, encrypted credentials), interactive SSH terminal, SFTP explorer, remote workspace binding, and session-scoped remote agent tools.",
   "license": "MIT",
@@ -37,6 +37,10 @@
     "README.en.md",
     "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": ">=20"
   },

@@ -32,20 +32,23 @@ dsh plugin --profile <profile> add dsh-better-sidebar
 
 ### 2. 安装 dsh-workspace
 
-用 [Releases](https://github.com/yh4922/dsh-workspace/releases) 里的安装包（`.tgz`）安装：
+从 npm 安装最新版（命令不带版本号，自动装最新一版）：
 
 ```bash
-dsh plugin --profile <profile> add https://github.com/yh4922/dsh-workspace/releases/download/v<版本>/dsh-workspace-<版本>.tgz
+dsh plugin --profile <profile> add @yh4922/dsh-workspace
 ```
 
-也可以先下载到本地，再用绝对路径安装：
+也可以装 [Releases](https://github.com/yh4922/dsh-workspace/releases) 里的最新安装包，或下载后用本地路径安装（文件名带版本号）：
 
 ```bash
-dsh plugin --profile <profile> add /path/to/dsh-workspace-<版本>.tgz
+dsh plugin --profile <profile> add https://github.com/yh4922/dsh-workspace/releases/latest/download/dsh-workspace.tgz
+dsh plugin --profile <profile> add /path/to/yh4922-dsh-workspace-<版本>.tgz
 ```
 
 - `<profile>` 是要安装到的 profile，例如 `web`
-- **DSH Desktop**：`desktop` profile 不能用命令行管理，请在「插件管理」→「添加插件」里填入上面的地址或本地路径
+- **升级**：先 `dsh plugin --profile <profile> remove @yh4922/dsh-workspace`，再用上面的命令安装。对同一个包/地址再装一次时，插件管理器判断不出这次装的是哪个包（依赖值没有变化），会回滚并提示「无法从依赖变更中确定安装了哪一个包」
+- **0.7.7 及更早版本的用户**：当时的包名是 `dsh-workspace`，请先 `dsh plugin --profile <profile> remove dsh-workspace` 再装新包名；否则会同时存在两个包，运行的仍是旧代码
+- **DSH Desktop**：`desktop` profile 不能用命令行管理，请在「插件管理」→「添加插件」里填入 `@yh4922/dsh-workspace` 或上面的地址；升级同样是先移除、再添加（插件管理里没有「更新」按钮）
 - 本插件依赖 `ssh2`，其中有原生构建脚本。pnpm 拦下构建时，在插件管理的失败界面点「允许这些脚本并重试」；命令行安装则按提示放行 `ssh2`、`cpu-features`
 - 不能直接从 Git 仓库地址安装：仓库里没有编译产物（`lib/`）
 
@@ -83,10 +86,10 @@ pnpm build
 | 命令 | 用途 |
 | --- | --- |
 | `npm run pack:dev` | 开发调试包：版本号为「下一个 patch-dev.时间戳」，只放在本机 `pack/`，不改 `package.json`、不推送 |
-| `npm run release -- [patch\|minor\|major]` | 正式发布：累加版本号，把 `CHANGELOG.md` 的「未发布」定稿为新版本，构建打包，提交并推送 tag，创建附带安装包的 GitHub Release |
-| `npm run release -- --dry-run --allow-dirty` | 发布演练：只检查、构建和打包，不提交不推送，结束后还原 |
+| `npm run release -- [patch\|minor\|major]` | 正式发布：累加版本号，把 `CHANGELOG.md` 的「未发布」定稿为新版本，构建打包，提交并推送 tag，创建附带安装包的 GitHub Release，并把同一个包发布到 npm |
+| `npm run release -- --dry-run --allow-dirty` | 发布演练：只检查、构建和打包（不发 npm、不提交不推送），结束后还原 |
 
-发布前要求：在 `main` 分支、没有未提交改动、与远程同步，且「未发布」下已写好本次的更新日志。
+发布前要求：在 `main` 分支、没有未提交改动、与远程同步，「未发布」下已写好本次的更新日志，且本机已 `npm login`（发布到 `registry.npmjs.org`，未登录会在前置检查阶段直接失败）。
 
 ## 安全说明
 

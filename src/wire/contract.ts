@@ -8,7 +8,9 @@
  * 手写两份清单是 skill-mcp-panel 那种写法，一旦漏改一边，调用会在运行时才失败。
  */
 
-export const PACKAGE = 'dsh-workspace'
+// 远程清单与描述符的身份名：typert 注册表按 `${PACKAGE}#...` 建键（同进程内不能重名），
+// 所以用真实包名，且不能含 '#'。注意它与 HTTP 路由前缀、错误码命名空间是两回事，后者保持 dsh-workspace 不变。
+export const PACKAGE = '@yh4922/dsh-workspace'
 export const SERVICE = 'dshWorkspace'
 
 /** 全部远程方法。每个方法只接收一个 payload 参数，返回一个值。 */

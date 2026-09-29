@@ -1,8 +1,11 @@
 # dsh-workspace bundle patch：只把本插件插入 profile 的 layer stack。
 #
+# 注意：insert 的 name 是 Node 模块说明符（= profile 依赖键 = node_modules 目录名），
+# 必须与 package.json 的 name 完全一致；对不上时宿主 import 失败（DSH 启动只告警，客户端 UI 会静默消失）。
+#
 # dsh-better-sidebar 刻意不在此挂载，也不是依赖。
 # 侧边栏 tab 由 lib/client.js 通过 ctx.get('betterSidebar') 动态探测，
 # 该服务存在时才注册，缺失则静默降级（主机管理页面与工作区能力不受影响）。
 - insert:
     - id: dsh-workspace
-      name: 'dsh-workspace'
+      name: '@yh4922/dsh-workspace'

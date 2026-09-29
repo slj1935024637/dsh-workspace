@@ -4,6 +4,10 @@
 
 ## 未发布
 
+- 包名由 `dsh-workspace` 改为 `@yh4922/dsh-workspace`（npm 上原名已被他人占用）；`cordis.patch.yml` 里 insert 的 name 必须与包名一致（否则插件加载不到），远程清单的身份名 `PACKAGE` 也一并对齐
+- 发布流程新增发布到 npm（`registry.npmjs.org`，`publishConfig.access=public`），并在 GitHub Release 额外上传固定文件名 `dsh-workspace.tgz` 供不带版本号的安装地址使用
+- 安装说明改为不带版本号：主推 `dsh plugin add @yh4922/dsh-workspace`，补充升级方式与旧包名迁移说明
+
 ## 0.7.7（2026-09-29）
 
 首个公开发布版本。以下为自 0.7.2 以来的变化，更早的版本仅为本地开发版本。

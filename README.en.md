@@ -32,20 +32,23 @@ dsh plugin --profile <profile> add dsh-better-sidebar
 
 ### 2. Install dsh-workspace
 
-Install the package (`.tgz`) from [Releases](https://github.com/yh4922/dsh-workspace/releases):
+Install the latest version from npm (the command carries no version number and always resolves to the newest release):
 
 ```bash
-dsh plugin --profile <profile> add https://github.com/yh4922/dsh-workspace/releases/download/v<version>/dsh-workspace-<version>.tgz
+dsh plugin --profile <profile> add @yh4922/dsh-workspace
 ```
 
-Or download it first and install from an absolute path:
+You can also install the latest package from [Releases](https://github.com/yh4922/dsh-workspace/releases), or download it and install from a local path (that file name contains the version):
 
 ```bash
-dsh plugin --profile <profile> add /path/to/dsh-workspace-<version>.tgz
+dsh plugin --profile <profile> add https://github.com/yh4922/dsh-workspace/releases/latest/download/dsh-workspace.tgz
+dsh plugin --profile <profile> add /path/to/yh4922-dsh-workspace-<version>.tgz
 ```
 
 - `<profile>` is the profile to install into, e.g. `web`
-- **DSH Desktop**: the `desktop` profile cannot be managed from the CLI; use "Plugin manager" → "Add plugin" and enter the URL or local path above
+- **Upgrading**: run `dsh plugin --profile <profile> remove @yh4922/dsh-workspace` first, then install with the command above. Installing the same package or URL again leaves the dependency value unchanged, so the plugin manager rolls the change back with "Which package was installed cannot be told from the dependency change."
+- **Coming from 0.7.7 or earlier**: the package name was `dsh-workspace` back then — run `dsh plugin --profile <profile> remove dsh-workspace` before installing the new name, otherwise both packages stay installed and the old code keeps running
+- **DSH Desktop**: the `desktop` profile cannot be managed from the CLI; use "Plugin manager" → "Add plugin" and enter `@yh4922/dsh-workspace` or the URL above. Upgrading means removing the plugin and adding it again — the plugin manager has no "Update" button
 - This plugin depends on `ssh2`, which has native build scripts. If pnpm blocks them, click "Allow these scripts and retry" in the plugin manager; on the CLI, approve `ssh2` and `cpu-features` when prompted
 - Installing directly from the Git repository URL does not work: the repository does not contain build output (`lib/`)
 
@@ -83,10 +86,10 @@ pnpm build
 | Command | Purpose |
 | --- | --- |
 | `npm run pack:dev` | Development package: version is "next patch-dev.timestamp", kept only in the local `pack/`; `package.json` is not changed and nothing is pushed |
-| `npm run release -- [patch\|minor\|major]` | Release: bump the version, finalize the "未发布" (Unreleased) section of `CHANGELOG.md`, build and pack, commit and push the tag, create a GitHub Release with the package attached |
-| `npm run release -- --dry-run --allow-dirty` | Rehearsal: checks, builds and packs only; nothing is committed or pushed, and files are restored afterwards |
+| `npm run release -- [patch\|minor\|major]` | Release: bump the version, finalize the "未发布" (Unreleased) section of `CHANGELOG.md`, build and pack, commit and push the tag, create a GitHub Release with the package attached, and publish the same package to npm |
+| `npm run release -- --dry-run --allow-dirty` | Rehearsal: checks, builds and packs only (no npm publish, nothing committed or pushed); files are restored afterwards |
 
-Before releasing: be on `main` with no uncommitted changes, in sync with the remote, and with the release notes written under "未发布".
+Before releasing: be on `main` with no uncommitted changes, in sync with the remote, with the release notes written under "未发布", and with `npm login` done on this machine (publishing goes to `registry.npmjs.org`; without a login the release fails at the pre-flight checks).
 
 ## Security
 
