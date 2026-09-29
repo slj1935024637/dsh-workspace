@@ -3,7 +3,11 @@
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/tsdown.config.ts
  */
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'tsdown'
+
+/** 浏览器端「关于」显示的版本号：打包时从 package.json 注入（见 src/client/build-info.ts）。 */
+const VERSION = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version
 
 /**
  * 浏览器端只能 require 宿主外壳提供的这几个「种子」模块。
@@ -57,6 +61,7 @@ export default defineConfig([
     outDir: 'lib',
     format: ['cjs'],
     platform: 'browser',
+    define: { __DSHWS_VERSION__: JSON.stringify(VERSION) },
     dts: false,
     clean: false,
     treeshake: true,

@@ -36,14 +36,15 @@ export const CSS = `
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 12px;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
 }
-.dshws-sections button {
+/* 只匹配分区标签本身：宿主 Switch 也是 button，放进标签栏会被这套样式撑变形（曾导致右上角开关被挤出屏幕） */
+.dshws-sections > button[role="tab"] {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 14px; margin-bottom: -1px; cursor: pointer;
   background: none; border: 0; border-bottom: 2px solid transparent;
   color: var(--dsw-alias-label-secondary); font-size: 14px;
 }
-.dshws-sections button:hover { color: var(--dsw-alias-label-primary); }
-.dshws-sections button[data-active="true"] {
+.dshws-sections > button[role="tab"]:hover { color: var(--dsw-alias-label-primary); }
+.dshws-sections > button[role="tab"][data-active="true"] {
   color: var(--dsw-alias-label-primary); font-weight: 500;
   border-bottom-color: var(--dsw-alias-brand-primary);
 }
@@ -120,7 +121,17 @@ export const CSS = `
 .dshws-split { display: flex; flex: 1 1 auto; height: 100%; min-height: 0; min-width: 0; }
 .dshws-split-list, .dshws-split-detail { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .dshws-split[data-wide="false"] > div { flex: 1 1 auto; }
-.dshws-split[data-wide="true"] > .dshws-split-list { flex: 0 0 clamp(300px, 40%, 520px); border-right: 1px solid var(--dsw-alias-border-l2); }
+/* 宽屏：列表宽度由 Split 按拖动结果内联给出（flex-basis），这里是未量到宽度前的兜底 */
+.dshws-split[data-wide="true"] > .dshws-split-list { flex: 0 0 clamp(300px, 40%, 520px); min-width: 240px; }
+/* 分隔条：6px 可拖区域，中间 1px 线；悬停 / 拖动 / 键盘聚焦时加粗高亮 */
+.dshws-split-handle { position: relative; flex: 0 0 6px; margin: 0 -3px; z-index: 2; cursor: col-resize; touch-action: none; outline: none; }
+.dshws-split-handle::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%);
+  background: var(--dsw-alias-border-l2); transition: width .12s, background-color .12s; }
+.dshws-split-handle:hover::after, .dshws-split-handle:focus-visible::after, .dshws-split[data-dragging="true"] > .dshws-split-handle::after {
+  width: 3px; background: var(--dsw-alias-state-business-primary); }
+/* 拖动时：禁止选中文字，右侧（编辑器 / iframe 预览）不吃指针事件，光标保持为调整宽度 */
+.dshws-split[data-dragging="true"] { cursor: col-resize; user-select: none; }
+.dshws-split[data-dragging="true"] > .dshws-split-detail { pointer-events: none; }
 .dshws-split[data-wide="true"] > .dshws-split-detail { flex: 1 1 auto; }
 .dshws-split-empty { margin: auto; font-size: 13px; color: var(--dsw-alias-label-tertiary); }
 .dshws-side-row[data-selected="true"] { background: var(--dsw-alias-interactive-bg-hover); }
@@ -388,9 +399,29 @@ export const CSS = `
 /* 内容页标题栏里的文字按钮 */
 .dshws-side-head .dshws-link-btn { display: inline-flex; align-items: center; gap: 2px; }
 
-/* 「接管添加工作区」开关：放在分区标签栏最右 */
-.dshws-takeover { margin-left: auto; flex-shrink: 0; white-space: nowrap; padding: 4px 0; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.dshws-takeover-note { color: var(--dsw-alias-state-warn-primary); }
+/* 全局配置页签：每组一张卡片；配置行左侧标题 + 说明、右侧开关 */
+.dshws-settings { display: flex; flex-direction: column; gap: 16px; max-width: 760px; padding-top: 4px; }
+.dshws-set-card { padding: 14px 18px 8px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); }
+.dshws-set-card > .dshws-section-title { margin-bottom: 4px; }
+.dshws-set-row { display: flex; align-items: center; gap: 24px; padding: 12px 0; }
+.dshws-set-row + .dshws-set-row { border-top: 1px solid var(--dsw-alias-border-l2); }
+.dshws-set-row[data-disabled="true"] .dshws-set-title { color: var(--dsw-alias-label-tertiary); }
+.dshws-set-text { flex: 1; min-width: 0; }
+.dshws-set-title { font-size: 13.5px; font-weight: 500; color: var(--dsw-alias-label-primary); }
+.dshws-set-desc { margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-tertiary); }
+.dshws-set-note { display: block; margin-top: 2px; color: var(--dsw-alias-state-warn-primary); }
+.dshws-set-control { flex-shrink: 0; display: flex; align-items: center; }
+.dshws-set-link { display: inline-flex; align-items: center; gap: 4px; color: var(--dsw-alias-state-business-primary); text-decoration: none; font-size: 13px; }
+.dshws-set-link:hover { text-decoration: underline; }
+.dshws-about { padding: 8px 0 12px; }
+.dshws-about-head { display: flex; align-items: baseline; gap: 8px; }
+.dshws-about-name { font-size: 16px; font-weight: 600; }
+.dshws-about-ver { padding: 1px 7px; border-radius: 9px; font-size: 11.5px; font-weight: 500; line-height: 18px;
+  color: var(--dsw-alias-state-business-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent); }
+.dshws-about-desc { margin: 6px 0 14px; font-size: 12.5px; line-height: 1.6; color: var(--dsw-alias-label-secondary); }
+.dshws-about-kv { margin: 0 0 14px; }
+.dshws-about-kv dd .dshws-set-link { font-family: inherit; }
+.dshws-about-links { display: flex; flex-wrap: wrap; gap: 8px 20px; padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l2); }
 
 /* 添加工作区弹窗：左侧位置栏（本机快捷目录 / 盘符 / 远程主机）+ 右侧目录浏览。内部一律 min-width: 0，避免长路径撑出弹窗 */
 .dshws-picker.dshws-picker { width: min(880px, 100%); max-height: 100%; gap: 16px; }

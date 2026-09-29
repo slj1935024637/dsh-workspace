@@ -3,8 +3,8 @@
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/WorkspacePage.tsx
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Menu, Switch, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useMemo, useRef, useState } from 'react'
+import { Button, Menu, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconChevronLeft, IconPlus } from '../icons.js'
 import type { HostView } from '../../types.js'
 import type { WorkspaceApi } from '../api.js'
@@ -16,7 +16,7 @@ import { LogPanel } from './LogPanel.js'
 import { TerminalsPane } from './TerminalsPane.js'
 import { DialogProvider, useDialogs } from './dialogs.js'
 import { FilesPane } from './FilesPane.js'
-import { emitTakeoverChange } from '../workspace/takeover.js'
+import { SettingsPane } from './SettingsPane.js'
 import { useWorkspace, messageOf } from './useWorkspace.js'
 import { AutoUnlockDialog, ChangePasswordDialog, HostKeyDialog, SetupBanner, UnlockBanner } from './vault.js'
 
@@ -26,39 +26,7 @@ const CLIENT_SCROLLBACK_LINES = 5000
 const INITIAL_COLS = 120
 const INITIAL_ROWS = 32
 
-type Section = 'hosts' | 'files' | 'terminals' | 'logs'
-
-/** 「接管添加工作区」开关。改动写入宿主偏好，并通知入口即时注册 / 撤下插槽。 */
-function TakeoverSwitch(props: { t: Translate; call: ReturnType<typeof useWorkspace>['call']; onError: (error: unknown) => void }) {
-  const [enabled, setEnabled] = useState<boolean | null>(null)
-  useEffect(() => {
-    void props.call('getPrefs', {}).then((p) => setEnabled(p.takeoverAddWorkspace), () => undefined)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-  if (enabled === null) return null
-  return (
-    <span className="dshws-takeover" title={props.t('settings.takeoverHint')}>
-      <Switch
-        checked={enabled}
-        label={props.t('settings.takeover')}
-        onChange={(next) => {
-          setEnabled(next)
-          void props.call('setTakeover', { enabled: next }).then(
-            (p) => {
-              setEnabled(p.takeoverAddWorkspace)
-              emitTakeoverChange(p.takeoverAddWorkspace)
-            },
-            (error: unknown) => {
-              // 写偏好失败：回滚开关并提示，而不是悄悄弹回去。
-              setEnabled(!next)
-              props.onError(error)
-            }
-          )
-        }}
-      />
-    </span>
-  )
-}
+type Section = 'hosts' | 'files' | 'terminals' | 'logs' | 'settings'
 
 export interface WorkspacePageProps {
   t: Translate
@@ -241,23 +209,7 @@ function WorkspacePageInner(props: WorkspacePageProps) {
           <p className="dshws-intro">{t('intro')}</p>
         </div>
         <div className="dshws-head-actions">
-          {state?.initialized === true ? (
-            <span className="dshws-takeover" title={t('vault.autoUnlockHint')}>
-              <Switch
-                checked={state.autoUnlock.enabled}
-                label={t('vault.autoUnlock')}
-                onChange={(next) => {
-                  // 开启要再确认一次主密码；关闭直接删掉本机记住的密钥。
-                  if (next) setEnablingAutoUnlock(true)
-                  else
-                    void model
-                      .call('setAutoUnlock', { enabled: false })
-                      .then(() => notify(t('vault.autoUnlockOff')))
-                      .catch(report)
-                }}
-              />
-            </span>
-          ) : null}
+          {/* 「接管添加工作区」「自动解锁」等开关在「全局配置」页签里 */}
           {state?.unlocked === true ? (
             <Button size="sm" variant="outline" onClick={() => void model.call('lock', {}).catch(report)}>
               {t('vault.lock')}
@@ -345,7 +297,7 @@ function WorkspacePageInner(props: WorkspacePageProps) {
       ) : null}
 
       <div className="dshws-sections" role="tablist">
-        {(['hosts', 'files', 'terminals', 'logs'] as const).map((key) => (
+        {(['hosts', 'files', 'terminals', 'logs', 'settings'] as const).map((key) => (
           <button
             key={key}
             type="button"
@@ -367,7 +319,6 @@ function WorkspacePageInner(props: WorkspacePageProps) {
             ) : null}
           </button>
         ))}
-        <TakeoverSwitch t={t} call={model.call} onError={report} />
       </div>
 
       <div className="dshws-body" data-section={section}>
@@ -466,6 +417,25 @@ function WorkspacePageInner(props: WorkspacePageProps) {
         {section === 'logs' ? (
           <div className="dshws-scroll">
             <LogPanel t={t} model={model} hosts={hosts} hostId={selectedId} onHostChange={setSelectedId} />
+          </div>
+        ) : null}
+
+        {section === 'settings' ? (
+          <div className="dshws-scroll">
+            <SettingsPane
+              t={t}
+              call={model.call}
+              autoUnlock={state?.initialized === true ? state.autoUnlock : null}
+              // 开启要再确认一次主密码；关闭直接删掉本机记住的密钥。
+              onEnableAutoUnlock={() => setEnablingAutoUnlock(true)}
+              onDisableAutoUnlock={() =>
+                void model
+                  .call('setAutoUnlock', { enabled: false })
+                  .then(() => notify(t('vault.autoUnlockOff')))
+                  .catch(report)
+              }
+              onError={report}
+            />
           </div>
         ) : null}
       </div>
