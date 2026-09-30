@@ -42,9 +42,13 @@ export function sessionFileAddress(sessionId: string, path: string): string {
   return `${FILE_ADDRESS_PREFIX}session/${enc(sessionId)}/${path.split('/').map(enc).join('/')}`
 }
 
-/** 本机路径的比较键：统一斜杠、去结尾斜杠、忽略大小写（占位目录都在 Windows / 本机上）。 */
+/**
+ * 本机路径的比较键：统一斜杠、去结尾斜杠。
+ * 只有 Windows 风格路径（盘符 / UNC）忽略大小写 —— Linux 区分大小写，一律转小写会让只差大小写的两个工作区互相串。
+ */
 export function localKey(p: string): string {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  const s = p.replace(/\\/g, '/').replace(/\/+$/, '')
+  return /^[A-Za-z]:\//.test(s) || /^[A-Za-z]:$/.test(s) || s.startsWith('//') ? s.toLowerCase() : s
 }
 
 /** POSIX 路径规范化（折叠 . 与 ..）。 */
@@ -67,13 +71,15 @@ export function normalizePosix(p: string): string {
  */
 export function toRemotePath(ws: RemoteWorkspaceView, input: string): string | undefined {
   const p = input.replace(/\\/g, '/')
-  if (/^[A-Za-z]:\//.test(p) || p.startsWith('//')) {
-    const key = localKey(p)
-    const root = localKey(ws.localPath)
-    if (key !== root && !key.startsWith(`${root}/`)) return undefined
+  // 先判断是否位于占位目录下：macOS / Linux 的占位目录本身就以 / 开头（/Users/me/.dsh/...），
+  // 若先按「/ 开头 = 远程路径」处理，会把本机路径原样当远程路径用。
+  const key = localKey(p)
+  const root = localKey(ws.localPath)
+  if (key === root || key.startsWith(`${root}/`)) {
     const rel = p.slice(ws.localPath.replace(/\\/g, '/').replace(/\/+$/, '').length)
     return normalizePosix(`${ws.remotePath}/${rel}`)
   }
+  if (/^[A-Za-z]:\//.test(p) || p.startsWith('//')) return undefined
   if (p.startsWith('/')) return normalizePosix(p)
   return normalizePosix(`${ws.remotePath}/${p}`)
 }

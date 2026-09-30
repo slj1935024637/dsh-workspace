@@ -365,6 +365,20 @@ export class RemoteFs {
   }
 
   /**
+   * 读取整个文件的原始字节（base64），给桌面版的预览内联资源用（图片 / 字体 / 样式 / 脚本）。
+   * 桌面版宿主只给 DSH 自己页面来源的请求放行，沙箱预览 iframe 里的相对资源请求会被拒，只能经远程调用取回后内联。
+   */
+  async readData(hostId: string, file: string, maxBytes: number): Promise<{ path: string; size: number; base64: string }> {
+    const target = normalizeRemotePath(file)
+    const sftp = await this.sftp(hostId)
+    const attrs = await call<SftpAttrs>((cb) => sftp.stat(target, cb))
+    if (typeOfMode(attrs.mode) !== 'file') throw new Error('只能读取普通文件。')
+    if (attrs.size > maxBytes) throw new Error(`文件过大（${attrs.size} 字节，上限 ${maxBytes}）。`)
+    const buffer = attrs.size === 0 ? Buffer.alloc(0) : await readAll(sftp.createReadStream(target))
+    return { path: target, size: attrs.size, base64: buffer.toString('base64') }
+  }
+
+  /**
    * 保存编辑器内容。
    *
    * - 冲突检测：远端 mtime 与打开时不同则拒绝（SFTP 的 mtime 精度为秒，同一秒内的

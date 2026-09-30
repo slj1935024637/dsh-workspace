@@ -45,6 +45,16 @@ describe('路径映射', () => {
     expect(toRemotePath(ws, 'c:/users/yangheng/.dsh/workspaces/remote/192.168.3.112-ps-22/测试DSH远程/x/y.ts')).toBe('/home/ps/testdsh/x/y.ts')
     expect(toRemotePath(ws, 'C:\\home\\ps\\testdsh\\app.js')).toBeUndefined()
   })
+
+  it('macOS / Linux：占位目录本身以 / 开头，也要先换成远程路径（不能当远程路径原样发出去）', () => {
+    const mac = { ...ws, localPath: '/Users/me/.dsh/workspaces/remote/192.168.3.112-ps-22/app' }
+    expect(toRemotePath(mac, '/Users/me/.dsh/workspaces/remote/192.168.3.112-ps-22/app/src/a.ts')).toBe('/home/ps/testdsh/src/a.ts')
+    expect(toRemotePath(mac, '/Users/me/.dsh/workspaces/remote/192.168.3.112-ps-22/app')).toBe('/home/ps/testdsh')
+    // 真正的远程绝对路径照旧
+    expect(toRemotePath(mac, '/home/ps/testdsh/b.ts')).toBe('/home/ps/testdsh/b.ts')
+    // Linux 区分大小写：只差大小写的路径不算占位目录
+    expect(toRemotePath(mac, '/users/me/.dsh/workspaces/remote/192.168.3.112-ps-22/app/x')).toBe('/users/me/.dsh/workspaces/remote/192.168.3.112-ps-22/app/x')
+  })
 })
 
 describe('RemoteIndex', () => {

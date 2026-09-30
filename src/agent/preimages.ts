@@ -10,7 +10,8 @@
  * 布局：<插件根>/preimages/<会话 id>/index.json + <sha256>.txt（内容按哈希去重）
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { renameWithRetry } from '../fs-atomic.js'
 import path from 'node:path'
 import { pluginRoot, safeSegment } from '../paths.js'
 
@@ -84,7 +85,7 @@ export class PreimageStore {
       const index = path.join(dir, 'index.json')
       const tmp = `${index}.tmp`
       writeFileSync(tmp, JSON.stringify({ version: 1, entries }, null, 2))
-      renameSync(tmp, index)
+      renameWithRetry(tmp, index)
     } catch {
       /* 见方法注释 */
     }

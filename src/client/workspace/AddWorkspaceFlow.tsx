@@ -32,6 +32,8 @@ import {
   remoteParent,
   type FolderBackend
 } from './FolderBrowser.js'
+import { isBrowseUnavailable, nativePicker } from './native-picker.js'
+import { isEmptyDirQuirk, isSystemDirName } from './browse-error.js'
 
 interface WorkspacesController {
   create(input: { path: string }): Promise<{ workspaceId: string; title: string }>
@@ -47,16 +49,29 @@ interface HostListing {
   truncated?: boolean
 }
 
+/**
+ * 挂载盘空文件夹的兜底：列一次上一级，确认该目录确实存在，才返回一个空列表；否则返回 undefined（照常报错）。
+ * 真的不存在 / 真的没权限时上一级里不会有它，或上一级本身就列不了，不会被误判成空。
+ */
+async function confirmQuirkEmpty(ui: UiWorkspace, p: string, signal: AbortSignal): Promise<HostListing | undefined> {
+  const parent = localParent(p)
+  if (parent === undefined) return undefined
+  try {
+    const up = await ui.listDirectory(parent, signal)
+    const norm = (s: string) => s.replace(/[\\/]+$/, '').toLowerCase()
+    const self = up.entries.find((e) => norm(e.path) === norm(p))
+    if (self === undefined) return undefined
+    return { path: self.path, entries: [], truncated: false }
+  } catch {
+    return undefined
+  }
+}
+
 interface UiWorkspace {
   listDirectory(path: string | undefined, signal?: AbortSignal): Promise<HostListing>
   createDirectory(path: string, name: string): Promise<unknown>
-}
-
-declare global {
-  interface Window {
-    /** DSH Desktop 注入的原生选择文件夹对话框（桌面版才有）。 */
-    __DSH_DESKTOP_PICK_DIRECTORY__?: () => Promise<string | null>
-  }
+  /** 宿主以 native 能力提供目录选择时可用：在宿主机上弹系统对话框。 */
+  pickDirectory?(): Promise<string | null>
 }
 
 export interface AddWorkspaceFlowProps {
@@ -185,6 +200,8 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
   const [error, setError] = useState<string | null>(null)
   /** 远程主机的连接状态：选中后首次列目录前为 connecting（SSH 握手可能要几秒），期间界面照常可操作。 */
   const [remotePhase, setRemotePhase] = useState<RemotePhase | null>(null)
+  /** 宿主只提供 native 选择器（不能浏览本机目录）：本机目录改由插件宿主端列出。 */
+  const [nativeOnly, setNativeOnly] = useState(false)
   const [folded, setFolded] = useState<Record<string, boolean>>(readFolded)
   const toggleFold = (key: string): void => {
     setFolded((cur) => {
@@ -199,7 +216,25 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
   latest.current = props
 
   const ui = props.uiWorkspace()
-  const localAvailable = ui !== undefined && typeof ui.listDirectory === 'function'
+  /**
+   * 本机目录的数据源：宿主能浏览（browse 能力）就用宿主；宿主只有 native（macOS 桌面版）或没有该服务时，
+   * 改用本插件宿主端的 localList / localMkdir（Node fs，见 src/local/browse.ts），保证三个平台都能应用内浏览。
+   */
+  const pluginLocal = useMemo<UiWorkspace>(
+    () => ({
+      listDirectory: async (p) => api.call('localList', p === undefined ? {} : { path: p }),
+      createDirectory: async (parent, name) => (await api.call('localMkdir', { parent, name })).path
+    }),
+    [api]
+  )
+  const hostBrowse = ui !== undefined && typeof ui.listDirectory === 'function' && !nativeOnly
+  const localSource: UiWorkspace = hostBrowse ? ui : pluginLocal
+  /** 切到插件数据源：重建浏览器并重算左侧位置。 */
+  const switchToPluginLocal = (): void => {
+    if (nativeOnly) return
+    setNativeOnly(true)
+    setStart((s) => ({ ...s, seq: s.seq + 1 }))
+  }
 
   // open 上升沿：开始一次新请求。下降沿（宿主撤回）：静默关闭，不再上报。
   useEffect(() => {
@@ -236,9 +271,16 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
 
     // 本机快捷位置：家目录 + 其中常见的桌面 / 文档 / 下载；Windows 再补盘符。
     const uiNow = latest.current.uiWorkspace()
-    if (uiNow === undefined || typeof uiNow.listDirectory !== 'function') return
-    void uiNow
-      .listDirectory(undefined)
+    const hostCanBrowse = uiNow !== undefined && typeof uiNow.listDirectory === 'function' && !nativeOnly
+    const fromPlugin = async (): Promise<HostListing & { drives?: string[] }> => api.call('localList', {})
+    const first: Promise<HostListing & { drives?: string[] }> = hostCanBrowse
+      ? uiNow.listDirectory(undefined).catch((err: unknown) => {
+          if (!isBrowseUnavailable(err)) throw err
+          setNativeOnly(true)
+          return fromPlugin()
+        })
+      : fromPlugin()
+    void first
       .then((home) => {
         const find = (name: string) => home.entries.find((e) => e.name.toLowerCase() === name.toLowerCase())
         const next: Place[] = [{ id: 'home', label: t('add.placeHome'), path: home.path, icon: <IconHome size={15} /> }]
@@ -252,7 +294,11 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
           if (hit !== undefined) next.push({ id: name, label, path: hit.path, icon })
         }
         setPlaces(next)
-        if (isWindowsPath(home.path)) {
+        if (home.drives !== undefined) {
+          // 插件数据源在列起始目录时已顺带探测了盘符。
+          drivesPromise.current = Promise.resolve(home.drives)
+          setDrives(home.drives)
+        } else if (isWindowsPath(home.path) && uiNow !== undefined) {
           drivesPromise.current = probeDrives(uiNow)
           void drivesPromise.current.then(setDrives)
         }
@@ -291,9 +337,8 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
     if (p !== undefined) setRemotePhase((cur) => (cur !== null && cur.phase !== 'ready' ? { ...cur, phase: 'ready' } : cur))
   }
 
-  const localBackend = useMemo<FolderBackend | undefined>(() => {
-    if (!localAvailable) return undefined
-    const uiNow = ui
+  const localBackend = useMemo<FolderBackend>(() => {
+    const uiNow = localSource
     return {
       list: async (p, signal) => {
         if (p === DRIVES) {
@@ -307,7 +352,14 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
             virtual: true
           }
         }
-        const r = await uiNow.listDirectory(p, signal)
+        let r: HostListing
+        try {
+          r = await uiNow.listDirectory(p, signal)
+        } catch (err) {
+          const empty = p !== undefined && isWindowsPath(p) && isEmptyDirQuirk(err) ? await confirmQuirkEmpty(uiNow, p, signal) : undefined
+          if (empty === undefined) throw err
+          r = empty
+        }
         const win = isWindowsPath(r.path)
         const base = r.crumbs !== undefined && r.crumbs.length > 0 ? r.crumbs.map((c) => ({ name: c.name, path: c.path })) : localCrumbs(r.path)
         return {
@@ -315,7 +367,12 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
           // 盘符根的上一级是「此电脑」（盘符列表）。
           parent: localParent(r.path) ?? (win ? DRIVES : undefined),
           crumbs: win ? [{ name: t('add.thisPc'), path: DRIVES }, ...base] : base,
-          entries: r.entries.map((e) => ({ name: e.name, path: e.path, hidden: e.hidden === true || e.name.startsWith('.') })),
+          // Windows 系统保留目录（System Volume Information 等）按隐藏处理：列不了，网盘挂载上还会报 EINVAL。
+          entries: r.entries.map((e) => ({
+            name: e.name,
+            path: e.path,
+            hidden: e.hidden === true || e.name.startsWith('.') || (win && isSystemDirName(e.name))
+          })),
           truncated: r.truncated === true
         }
       },
@@ -326,7 +383,7 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localAvailable])
+  }, [hostBrowse, pluginLocal])
 
   const remoteHostId = source.kind === 'remote' ? source.hostId : ''
   const remoteBackend = useMemo<FolderBackend | undefined>(() => {
@@ -377,11 +434,14 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
   }
 
   const pickNative = async (): Promise<void> => {
-    const picker = window.__DSH_DESKTOP_PICK_DIRECTORY__
+    const picker = nativePicker(ui)
     if (picker === undefined) return
+    setError(null)
     try {
       const chosen = await picker()
-      if (chosen !== null && chosen !== '') go({ kind: 'local' }, chosen)
+      if (chosen === null || chosen === '') return
+      // 跳到选中的目录，方便再往下挑。
+      go({ kind: 'local' }, chosen)
     } catch (err) {
       setError(messageOf(err))
     }
@@ -423,22 +483,10 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
   const selectedHost = source.kind === 'remote' ? hosts.find((h) => h.id === source.hostId) : undefined
   const remoteLocked = source.kind === 'remote' && locked
   const backend = source.kind === 'local' ? localBackend : remoteBackend
-  const hasNative = window.__DSH_DESKTOP_PICK_DIRECTORY__ !== undefined
+  const hasNative = nativePicker(ui) !== undefined
 
   const renderBrowser = (): ReactNode => {
     if (source.kind === 'local') {
-      if (localBackend === undefined) {
-        return (
-          <div className="dshws-pk-empty">
-            <span>{t('add.noLocalPicker')}</span>
-            {hasNative ? (
-              <Button variant="outline" size="sm" onClick={() => void pickNative()}>
-                {t('add.pickNative')}
-              </Button>
-            ) : null}
-          </div>
-        )
-      }
       return (
         <FolderBrowser
           key={`local-${start.seq}`}
@@ -448,6 +496,12 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
           showHidden={showHidden}
           mkdirRequest={mkdirRequest}
           onPathChange={choosePath}
+          onError={(err) => {
+            // 宿主不支持浏览：换插件数据源重建浏览器，不显示原始报错。
+            if (!isBrowseUnavailable(err)) return false
+            switchToPluginLocal()
+            return true
+          }}
         />
       )
     }
@@ -566,7 +620,7 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
             >
               {t('files.newFolder')}
             </Button>
-            {source.kind === 'local' && hasNative && localBackend !== undefined ? (
+            {source.kind === 'local' && hasNative ? (
               <Button size="sm" variant="outline" onClick={() => void pickNative()} disabled={busy}>
                 {t('add.pickNative')}
               </Button>
@@ -619,7 +673,7 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
               <span className="dshws-pk-place-name">{t('add.driveLabel', { drive: d.slice(0, 2) })}</span>
             </button>
           ))}
-          {places.length === 0 && localAvailable ? (
+          {places.length === 0 ? (
             <button type="button" className="dshws-pk-place" data-active={source.kind === 'local'} onClick={() => go({ kind: 'local' })}>
               <IconHome size={15} />
               <span className="dshws-pk-place-name">{t('add.placeHome')}</span>

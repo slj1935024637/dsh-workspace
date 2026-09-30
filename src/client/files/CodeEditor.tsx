@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import type * as MonacoApi from 'monaco-editor'
 import type { Translate } from '../context.js'
 import { isLight, onHostThemeChange, resolveColor } from '../terminal/theme.js'
-import { languageFor, languageOptions, loadMonaco, type AssetFetcher, type Monaco } from './monaco-loader.js'
+import { checkMonacoLayout, ensureMonacoCss, languageFor, languageOptions, loadMonaco, type AssetFetcher, type Monaco } from './monaco-loader.js'
 
 export interface CodeEditorProps {
   t: Translate
@@ -104,6 +104,7 @@ export function CodeEditor(props: CodeEditorProps) {
     loadMonaco(latest.current.fetchAsset)
       .then((monaco) => {
         if (disposed || hostRef.current === null) return
+        ensureMonacoCss(hostRef.current)
         applyHostTheme(monaco)
         offTheme = onHostThemeChange(() => applyHostTheme(monaco))
 
@@ -130,6 +131,8 @@ export function CodeEditor(props: CodeEditorProps) {
           unicodeHighlight: { ambiguousCharacters: false }
         })
         editorRef.current = editor
+        const created = hostRef.current
+        setTimeout(() => checkMonacoLayout(created), 0)
         // 创建期间 readOnly 可能已变（例如分支编辑方式刚取回）：以最新值为准。
         if (latest.current.readOnly !== props.readOnly) editor.updateOptions({ readOnly: latest.current.readOnly })
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {

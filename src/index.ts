@@ -204,7 +204,13 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
         handler: (req, socket, head) => {
           // 每次请求现读 trustedHosts：部署方更新信任列表后无需重启插件即生效。
           if (!isTrustedRequest(req, face.webRuntime.trustedHosts)) {
-            runtime.log.warn('', 'terminal', '拒绝了一次不受信任的终端连接请求。', req.headers.host?.toString())
+            // 带上 Origin：页面来源与宿主地址不一致（如桌面版自定义页面来源）时，靠它判断是哪一种被拒。
+            runtime.log.warn(
+              '',
+              'terminal',
+              '拒绝了一次不受信任的终端连接请求。',
+              `host=${String(req.headers.host ?? '')} origin=${String(req.headers.origin ?? '')} sec-fetch-site=${String(req.headers['sec-fetch-site'] ?? '')}`
+            )
             ;(socket as Duplex).destroy()
             return
           }

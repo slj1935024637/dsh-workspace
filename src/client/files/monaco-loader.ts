@@ -22,7 +22,59 @@ declare global {
     __dshwsMonaco?: { api: Monaco; version: string }
     /** 编辑器 worker 的地址，由本模块在加载主脚本前设置。 */
     __dshwsMonacoWorkerUrl?: string
+    /** Monaco 全部 CSS 文本（monaco.js 执行时累积），供 ensureMonacoCss 补回样式。 */
+    __dshwsMonacoCss?: string
   }
+}
+
+const MONACO_CSS_ID = 'dshws-monaco-css'
+
+/**
+ * 确保编辑器所在的文档（或 Shadow Root）里有 Monaco 样式。
+ * 缺样式时 Monaco 照样创建，但隐藏输入框显示成原生 textarea、代码行脱离容器乱飘（macOS 反馈的「预览错乱 + 多一个输入框」）。
+ * monaco.js 只执行一次，样式标签一旦被移除（插件热重载时宿主清理页面节点）就不会自己回来，所以每次创建编辑器前核对。
+ */
+export function ensureMonacoCss(host: Element): void {
+  const css = window.__dshwsMonacoCss
+  if (typeof css !== 'string' || css === '') return
+  const root = host.getRootNode()
+  const inShadow = typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot
+  // 用编辑器所在的文档（而不是全局 document）：宿主若把面板渲染进别的文档，样式要跟过去。
+  const doc = host.ownerDocument
+  const scope: ParentNode = inShadow ? (root as ShadowRoot) : doc
+  const existing = scope.querySelector(`#${MONACO_CSS_ID}`)
+  if (existing !== null && (existing.textContent ?? '').length >= css.length) return
+  const style = existing ?? doc.createElement('style')
+  style.id = MONACO_CSS_ID
+  style.textContent = css
+  if (existing === null) {
+    console.warn(`[dsh-workspace] Monaco 样式缺失，已补回（${inShadow ? 'Shadow DOM' : doc === document ? 'document.head' : '其他文档'}）`)
+    ;(inShadow ? (root as ShadowRoot) : doc.head).appendChild(style)
+  }
+}
+
+/**
+ * 编辑器创建后自检：Monaco 的隐藏输入框必须是绝对定位。不是说明样式没生效（macOS 反馈的「多一个输入框」），
+ * 在控制台留下定位信息，便于在拿不到机器的平台上排查。
+ */
+export function checkMonacoLayout(host: Element): void {
+  const input = host.querySelector('textarea')
+  if (input === null) return
+  const view = host.ownerDocument.defaultView ?? window
+  const position = view.getComputedStyle(input).position
+  if (position === 'absolute') return
+  const root = host.getRootNode()
+  console.error('[dsh-workspace] Monaco 样式未生效', {
+    position,
+    cssCached: (window.__dshwsMonacoCss ?? '').length,
+    styleTags: host.ownerDocument.querySelectorAll(`#${MONACO_CSS_ID}`).length,
+    styleLength: host.ownerDocument.getElementById(MONACO_CSS_ID)?.textContent?.length ?? 0,
+    inShadow: typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot,
+    sameDocument: host.ownerDocument === document,
+    inputClass: input.className,
+    monacoVersion: window.__dshwsMonaco?.version,
+    userAgent: navigator.userAgent
+  })
 }
 
 const TIMEOUT_MS = 120_000

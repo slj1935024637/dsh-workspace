@@ -4,6 +4,27 @@
 
 ## 未发布
 
+- 修复：宿主目录选择能力为 native（macOS 桌面版，只能弹系统对话框）时，「添加工作区」的本机一栏直接显示 `directory-picker/unavailable ... serves "native"` 报错。现在改由插件宿主端自己列本机目录（新增远程方法 `localList` / `localMkdir`，Node fs 实现，只列子目录），macOS 上也能应用内浏览、新建文件夹；「使用系统对话框…」按钮仍保留（取用顺序与官方 native picker 一致）
+- 修复：桌面版远程文件侧栏的 HTML / Markdown 预览白屏或报 `Browser access is disabled`。桌面版本机 Web 服务只放行 DSH 自身页面来源的请求，而预览 iframe 刻意不带 `allow-same-origin`（远程 HTML 不可信），它的请求拿不到放行令牌。桌面版改为 srcdoc 预览：页面里的相对样式表 / 脚本 / 图片 / CSS `url()` 与 `@import` 经新增的远程方法 `sftpReadData` 取回后内联（单个资源上限 8 MB），iframe 仍是不透明来源；网页版保持原来的预览路由。已知限制：脚本运行时 fetch / 动态加载的相对资源不可用
+- 修复：Monaco 编辑器样式丢失时（macOS 反馈：代码行乱飘、多出一个原生输入框）不会自己恢复——monaco.js 只执行一次，样式标签被移除后就再也不注入。现在构建产物把 CSS 全文存到 `window.__dshwsMonacoCss`，每次创建编辑器 / 对比视图前核对并补回（也兼容挂在 Shadow DOM 里的情况）
+- 桌面版预览内联增加兜底：`sftpReadData` 失败（典型是宿主端仍为旧版本、新方法 404）时，样式表 / 脚本 / SVG 退回用 `sftpRead` 按文本读取，页面不再整页丢样式；仍失败的资源在预览上方提示（含「请用 ⌘Q 完全退出」），不再静默
+- DSH NEXT（页面为 `dsh-app://app`）适配：HTTP 请求（上传 / 下载 / 预览路由 / 图片）保持页面同源的相对地址——NEXT 只给主框架的同源请求附渲染进程令牌，直连 `streamBaseUrl` 的 http 地址会被拒（`Browser access is disabled`）；WebSocket 仍走 `streamBaseUrl`。下载在自定义协议页面上改为 fetch 取回再存盘（`<a download>` 是导航请求，拿不到令牌），失败时弹出原因
+- 编辑器创建后自检隐藏输入框的定位，样式未生效时在控制台输出定位信息（样式标签数量 / 长度、是否 Shadow DOM、UA 等）；补样式时改用编辑器所在文档
+- 信任围栏：回环主机名视为同一族（`localhost` / `127.x` / `[::1]` 互访放行，含 `sec-fetch-site: cross-site`），外站与局域网规则不变
+- 插件宿主端还是旧版本（升级后只刷新了页面）时，「添加工作区」不再显示 `transport failure ... HTTP 404`，改为提示完全重启 DSH
+- Windows：原子写的改名步骤遇到杀毒 / 索引占用（EPERM / EACCES / EBUSY）时退避重试约 0.6 秒，失败则清理临时文件；自动解锁的 DPAPI 调用改用 `%SystemRoot%` 下 PowerShell 的绝对路径，被系统策略（AppLocker / 受限语言模式）拦截时给出可读原因
+- macOS：本机路径比较不区分大小写（APFS 默认不区分），与 Windows 一致
+- 跨平台修正（macOS / Linux）：
+  - 远程工作区路径映射：占位目录在 macOS / Linux 上本身以 `/` 开头，原先会被当成远程路径原样发给远端（Agent 工具与侧栏打开文件都受影响）；现在先判断是否位于占位目录下（宿主端同时比较字面路径与 realpath），客户端比较键只在 Windows 风格路径上忽略大小写
+  - 私钥路径支持 `~/.ssh/...`（原先 readFileSync 不认 `~`），中文占位提示同步改为 `~/.ssh/id_ed25519`
+  - 终端：macOS 搜索改为 ⌘F（Ctrl+F 留给 readline / vim / less），Option 当 Meta（Alt+B/F/D 按词移动）；Ctrl+Shift+C / V 补 `preventDefault`，修复 Chromium 上粘贴两次；右键菜单的快捷键提示按平台显示
+  - 保险箱、known-hosts、绑定、终端记录、偏好文件以 0600 写入、数据目录 0700 创建（macOS / Linux 原先是 0644 / 0755，明文字段对同机其他用户可读）
+  - ssh-agent 认证在 Windows 上回退到 OpenSSH 命名管道；Windows 保留名判定补上带扩展名的情况（`aux.api` 等）
+- 「添加工作区」目录浏览的错误改为横幅样式：标题说明哪个目录/操作失败，不可读时给出可能原因，原始报错折叠在「详情」里（可选中复制），带「重试」与关闭；进不去的子目录不再影响当前列表
+- Windows 卷根的系统保留目录（`System Volume Information`、`$RECYCLE.BIN` 等）按隐藏处理——部分磁盘 / 网盘挂载（如 115 网盘）不会给它们打隐藏属性，点进去会报 `EINVAL ... readdir`
+- 修复：115 网盘等挂载盘上的**空文件夹**打不开（报 `EINVAL: invalid argument, readdir`）。这类驱动对空目录的枚举直接返回失败（cmd `dir` 显示 File Not Found），现在遇到该错误时先列上一级确认目录存在，存在就按空文件夹显示，可以正常选作工作区
+- 终端 WebSocket 地址改为优先使用宿主注入的 `__DSH_TRANSPORT__.streamBaseUrl`（与宿主自身流通道一致），不再只看页面地址——针对 macOS 桌面版终端一直「连接中断，正在重连」而 SFTP 正常的反馈；首次断开时在控制台输出目标地址，服务端拒绝终端连接的日志补上 Origin / Sec-Fetch-Site 便于排查
+
 ## 0.10.0（2026-09-29）
 
 - 移动端/窄屏适配：新增 `useNarrow()`（主区按视口宽度判断）与 `@media (max-width: 640px)` 样式段——主机列表不再换行、改为整卡左右滑动；页签横向滚动；页面内边距与头部收紧（简介在窄屏隐藏）

@@ -5,6 +5,15 @@
  */
 import { ERROR_CODES, SFTP_HTTP_PREFIX } from '../../wire/contract.js'
 
+/**
+ * 页面是否由桌面版的自定义协议提供（DSH NEXT：dsh-app://app）。
+ * 这类页面发往同源的请求由 Electron 转发给宿主并附上渲染进程令牌，但只认「主框架发出的子资源请求」：
+ * 页面导航（<a download> 触发的下载就是一次导航）与 iframe 里的请求都拿不到令牌，会被拒绝。
+ */
+function isCustomSchemePage(): boolean {
+  return typeof window !== 'undefined' && !/^https?:$/.test(window.location.protocol)
+}
+
 /** 传输失败。code 与 Typert 错误码同一套，页面可复用同样的分支（如锁定时弹解锁框）。 */
 export class TransferError extends Error {
   constructor(
@@ -47,6 +56,7 @@ export function uploadFile(
     overwrite: target.overwrite ? '1' : '0'
   })
   const promise = new Promise<{ path: string }>((resolve, reject) => {
+    // 必须是页面同源的相对地址：桌面版（dsh-app://app）只给同源请求附令牌，直连宿主 http 地址会被拒（Browser access is disabled）。
     xhr.open('POST', `${SFTP_HTTP_PREFIX}/upload?${query.toString()}`)
     xhr.setRequestHeader('Content-Type', 'application/octet-stream')
     xhr.upload.onprogress = (event) => {
@@ -73,24 +83,50 @@ export function uploadFile(
   return { promise, abort: () => xhr.abort() }
 }
 
-/** 下载地址。直接交给浏览器下载，大文件不经过页面内存。 */
+/** 下载地址（页面同源的相对地址）。 */
 export function downloadUrl(hostId: string, remotePath: string): string {
   return `${SFTP_HTTP_PREFIX}/download?${new URLSearchParams({ host: hostId, path: remotePath }).toString()}`
 }
 
 /**
  * 触发浏览器下载。
- * 必须带 download 属性：没有它时点击是一次页面导航，在 DSH Desktop（Electron）里会把整个界面
- * 带离当前页（遇到错误时直接停在 404 页）；有它则同源下只触发下载，页面原地不动。
+ * 普通页面：<a download>，大文件不经过页面内存。必须带 download 属性：没有它时点击是一次页面导航，
+ * 在 DSH Desktop（Electron）里会把整个界面带离当前页（遇到错误时直接停在 404 页）；有它则只触发下载。
+ * 自定义协议页面（DSH NEXT）：导航请求拿不到令牌，改为 fetch（主框架子资源请求）取回再存盘。
  */
 export function startDownload(hostId: string, remotePath: string): void {
+  const url = downloadUrl(hostId, remotePath)
+  if (isCustomSchemePage()) {
+    void fetchDownload(url, baseName(remotePath))
+    return
+  }
+  saveAs(url, baseName(remotePath))
+}
+
+function saveAs(href: string, name: string): void {
   const a = document.createElement('a')
-  a.href = downloadUrl(hostId, remotePath)
-  a.download = baseName(remotePath)
+  a.href = href
+  a.download = name
   a.rel = 'noopener'
   document.body.appendChild(a)
   a.click()
   a.remove()
+}
+
+async function fetchDownload(url: string, name: string): Promise<void> {
+  try {
+    const res = await fetch(url, { credentials: 'same-origin' })
+    if (!res.ok) {
+      const body = parseJson(await res.text())
+      throw new Error(typeof body.message === 'string' ? body.message : `HTTP ${res.status}`)
+    }
+    const blobUrl = URL.createObjectURL(await res.blob())
+    saveAs(blobUrl, name)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
+  } catch (err) {
+    console.error('[dsh-workspace] 下载失败', err)
+    window.alert(`下载失败：${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 function parseJson(text: string): Record<string, unknown> {

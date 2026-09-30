@@ -169,6 +169,20 @@ export interface MethodIO {
   git: [GitInput, unknown]
   /** 自动解锁开关；开启时需要主密码。 */
   setAutoUnlock: [{ enabled: boolean; password?: string }, { ok: boolean; enabled: boolean }]
+  /** 宿主机本地目录浏览（宿主目录选择器只有 native 能力时，「添加工作区」用它做应用内浏览）。 */
+  localList: [{ path?: string }, LocalListOutput]
+  localMkdir: [{ parent: string; name: string }, { path: string }]
+  /** 读整个文件为 base64（桌面版预览内联资源用；有大小上限）。 */
+  sftpReadData: [{ hostId: string; path: string }, { path: string; size: number; base64: string }]
+}
+
+export interface LocalListOutput {
+  path: string
+  home: string
+  entries: Array<{ name: string; path: string; hidden: boolean }>
+  truncated: boolean
+  /** Windows 列起始目录时附带的盘符根。 */
+  drives?: string[]
 }
 
 export type GitOp =

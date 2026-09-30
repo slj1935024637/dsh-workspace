@@ -87,8 +87,31 @@ export function createSftpHttpHandler(deps: SftpHttpDeps) {
     // 与 /api 网关、终端 socket 同一道围栏：挡住 DNS 重绑定与跨站请求。
     // 下载走 GET，恶意页面用 <a>/<img> 触发时浏览器会带 sec-fetch-site: cross-site，在此被拒。
     if (!isTrustedRequest(req as never, deps.trustedHosts())) {
-      deps.rt.log.warn('', 'sftp', '拒绝了一次不受信任的文件传输请求。', String(req.headers.host ?? ''))
+      deps.rt.log.warn(
+        '',
+        'sftp',
+        '拒绝了一次不受信任的文件传输请求。',
+        `host=${String(req.headers.host ?? '')} origin=${String(req.headers.origin ?? '')} sec-fetch-site=${String(req.headers['sec-fetch-site'] ?? '')}`
+      )
       return fail(res, 403, 'dsh-workspace/forbidden', 'forbidden')
+    }
+
+    // 桌面版的页面来源可以不是宿主服务（端口不同 = 跨源）：上传 XHR 需要 CORS 头才能读到结果。
+    // 只回显「已通过上面信任围栏」的请求的 Origin（围栏已要求 Origin 与 Host 同为本机回环或同一主机名），不用 *。
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
+    if (origin !== undefined && origin !== 'null') {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+    }
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Max-Age': '600',
+        'Cache-Control': 'no-store'
+      })
+      res.end()
+      return
     }
 
     const url = new URL(req.url ?? '/', 'http://x')

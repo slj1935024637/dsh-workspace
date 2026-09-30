@@ -12,6 +12,8 @@ import type { ReadResult } from '../../wire/dto.js'
 import { CodeEditor } from '../files/CodeEditor.js'
 import type { RemoteIndex } from './remote-index.js'
 import { directoryHref, markdownDocument } from './markdown.js'
+import { isDesktopRenderer } from '../host-url.js'
+import { fallbackReader, inlineHtml, type InlineFailure } from './inline-preview.js'
 import { isLight, resolveColor } from '../terminal/theme.js'
 import { FileIcon, IconButton, IconClose, IconRefresh } from './ui.js'
 
@@ -60,6 +62,7 @@ export function RemoteFileTab(props: SidebarBodyProps) {
       hostId={resolved.workspace.hostId}
       remotePath={resolved.remotePath}
       workspaceTitle={resolved.workspace.title}
+      workspaceRoot={resolved.workspace.remotePath}
     />
   )
 }
@@ -70,6 +73,8 @@ export interface RemoteFileViewerProps {
   hostId: string
   remotePath: string
   workspaceTitle: string
+  /** 远程工作区根（预览内联时 / 开头的引用以它为基准）；缺省用文件所在目录。 */
+  workspaceRoot?: string
   /** 嵌在分栏右侧时提供：显示关闭按钮。 */
   onClose?(): void
   /** 保存成功后通知（Git 面板据此刷新改动列表）。 */
@@ -119,6 +124,7 @@ export function RemoteFileViewer(props: RemoteFileViewerProps) {
     if (mode !== 'preview' || hostId === undefined || remotePath === undefined) return
     let alive = true
     api.call('previewUrl', { hostId, path: remotePath }).then(
+      // 保持页面同源的相对地址：DSH NEXT 的页面是 dsh-app://app，同源请求才会被转发并附上令牌。
       (r) => alive && setPreviewSrc(r.url),
       (err: unknown) => alive && setError(messageOf(err))
     )
@@ -126,6 +132,42 @@ export function RemoteFileViewer(props: RemoteFileViewerProps) {
       alive = false
     }
   }, [api, hostId, mode, remotePath])
+
+  /**
+   * 桌面版：HTML / SVG / Markdown 的预览改为 srcdoc + 相对资源内联（见 inline-preview.ts）。
+   * 预览 iframe 不带 allow-same-origin，在桌面版里它发出的请求拿不到渲染进程令牌，会被本机 Web 服务拒绝。
+   */
+  const desktop = isDesktopRenderer()
+  const [inlined, setInlined] = useState<string | null>(null)
+  const [inlineFailures, setInlineFailures] = useState<InlineFailure[]>([])
+  const dark = !isLight(resolveColor('var(--dsw-alias-bg-layer-1)', '#ffffff'))
+  useEffect(() => {
+    setInlined(null)
+    setInlineFailures([])
+    if (!desktop || mode !== 'preview' || file === null || file.binary || !PREVIEWABLE.test(remotePath)) return
+    let alive = true
+    const root = props.workspaceRoot ?? remotePath.slice(0, remotePath.lastIndexOf('/')) ?? '/'
+    const source = MARKDOWN.test(remotePath) ? markdownDocument(file.content, undefined, dark) : file.content
+    const failures: InlineFailure[] = []
+    const reader = fallbackReader(
+      async (p) => (await api.call('sftpReadData', { hostId, path: p })).base64,
+      (p) => api.call('sftpRead', { hostId, path: p }),
+      failures
+    )
+    inlineHtml(source, remotePath, root, reader).then(
+      (html) => {
+        if (!alive) return
+        setInlined(html)
+        setInlineFailures(failures)
+        if (failures.length > 0) console.warn('[dsh-workspace] 预览资源未能内联', failures)
+      },
+      (err: unknown) => alive && setError(messageOf(err))
+    )
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktop, mode, file, remotePath, hostId, previewNonce])
 
   const save = async (value: string, force = false): Promise<void> => {
     if (hostId === undefined || remotePath === undefined || file === null) return
@@ -205,7 +247,31 @@ export function RemoteFileViewer(props: RemoteFileViewerProps) {
       ) : null}
 
       {mode === 'preview' ? (
-        previewSrc === null ? (
+        desktop && !IMAGE.test(name) ? (
+          inlined === null ? (
+            <div className="dshws-tree-note">{t('files.loading')}</div>
+          ) : (
+            <>
+              {inlineFailures.length > 0 ? (
+                <div className="dshws-tree-note" data-tone="warn" title={inlineFailures.map((f) => `${f.path}\n  ${f.message}`).join('\n')}>
+                  {t('side.inlineMissing', {
+                    count: String(inlineFailures.length),
+                    list: inlineFailures.slice(0, 3).map((f) => f.path.slice(f.path.lastIndexOf('/') + 1)).join('、')
+                  })}
+                  {inlineFailures.some((f) => /HTTP 404/.test(f.message)) ? ` ${t('side.hostOutdated')}` : ''}
+                </div>
+              ) : null}
+              {/* 桌面版：srcdoc + 内联资源。沙箱同网页版（Markdown 不给脚本）。 */}
+              <iframe
+                key={previewNonce}
+                className="dshws-side-frame"
+                title={name}
+                sandbox={MARKDOWN.test(name) ? '' : 'allow-scripts allow-forms allow-popups allow-modals'}
+                srcDoc={inlined}
+              />
+            </>
+          )
+        ) : previewSrc === null ? (
           <div className="dshws-tree-note">{t('files.loading')}</div>
         ) : MARKDOWN.test(name) ? (
           file === null ? (

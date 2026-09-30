@@ -55,7 +55,10 @@ export const METHODS = [
   'previewUrl',
   'git',
   'setAutoUnlock',
-  'sftpCopy'
+  'sftpCopy',
+  'localList',
+  'localMkdir',
+  'sftpReadData'
 ] as const
 
 /** 经远程调用分段下发的编辑器资源。 */

@@ -10,7 +10,8 @@
  * 主键用规范化后的占位目录路径，而不是 workspaceId：工作区删掉重加后 id 会变，路径不变。
  * 占位目录内另写一份 meta 文件作为双保险 —— 映射表丢失时可据此重建。
  */
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { renameWithRetry } from '../fs-atomic.js'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { WORKSPACE_META_FILE, bindingsFile, pluginRoot, safeSegment } from '../paths.js'
@@ -51,7 +52,15 @@ export function pathKey(p: string): string {
     /* 目录已不存在：按字面比较 */
   }
   resolved = resolved.replace(/[\\/]+$/, '')
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  return caseInsensitiveFs() ? resolved.toLowerCase() : resolved
+}
+
+/**
+ * 本机文件系统是否不区分大小写：Windows（NTFS）与 macOS（APFS / HFS+ 默认）是，Linux 不是。
+ * macOS 的 realpath 不会把大小写规范化，会话 cwd 与登记路径只差大小写时要靠这里兜住。
+ */
+export function caseInsensitiveFs(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' || platform === 'darwin'
 }
 
 /**
@@ -63,7 +72,8 @@ export function folderName(input: string): string {
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
     .replace(/[. ]+$/, '')
     .trim()
-  const reserved = /^(con|prn|aux|nul|com\d|lpt\d)$/i
+  // 带扩展名的也是保留名（aux.api、con.d 在 Windows 上同样建不出来）。
+  const reserved = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i
   if (cleaned === '' || reserved.test(cleaned)) return `_${cleaned}`
   return cleaned.slice(0, 120)
 }
@@ -95,10 +105,10 @@ export class BindingStore {
 
   private persist(): void {
     const file = this.file()
-    mkdirSync(path.dirname(file), { recursive: true })
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
-    writeFileSync(tmp, JSON.stringify({ version: 1, bindings: [...this.load().values()] }, null, 2), 'utf8')
-    renameSync(tmp, file)
+    writeFileSync(tmp, JSON.stringify({ version: 1, bindings: [...this.load().values()] }, null, 2), { encoding: 'utf8', mode: 0o600 })
+    renameWithRetry(tmp, file)
   }
 
   list(): RemoteBinding[] {
@@ -226,24 +236,52 @@ export class BindingStore {
  */
 export function toRemotePath(binding: RemoteBinding, input: string): string {
   const raw = input.trim()
-  const localKey = pathKey(binding.localPath)
-  const asLocal = path.resolve(binding.localPath, raw)
-  const asLocalKey = process.platform === 'win32' ? asLocal.toLowerCase() : asLocal
   let remote: string
-  if (raw.startsWith('/') && !isWindowsAbsolute(raw)) {
+  // 顺序很重要：先判断「是否位于占位目录下」，再把 / 开头的当远程路径。
+  // macOS / Linux 的占位目录本身就以 / 开头（/Users/me/.dsh/...），先判远程会把本机路径原样发给远端。
+  const rel = isWindowsAbsolute(raw) || path.isAbsolute(raw) ? localRelative(binding.localPath, path.resolve(raw)) : undefined
+  if (rel !== undefined) {
+    remote = rel === '' ? binding.remotePath : `${binding.remotePath}/${rel}`
+  } else if (raw.startsWith('/') && !isWindowsAbsolute(raw)) {
     remote = raw
   } else if (isWindowsAbsolute(raw) || path.isAbsolute(raw)) {
-    if (asLocalKey === localKey || asLocalKey.startsWith(`${localKey}${path.sep}`)) {
-      const rel = path.relative(binding.localPath, asLocal).split(path.sep).join('/')
-      remote = rel === '' ? binding.remotePath : `${binding.remotePath}/${rel}`
-    } else {
-      throw new Error(`远程工作区中不能访问本机路径：${raw}。请使用远程路径（如 ${binding.remotePath}/...）或相对路径。`)
-    }
+    throw new Error(`远程工作区中不能访问本机路径：${raw}。请使用远程路径（如 ${binding.remotePath}/...）或相对路径。`)
   } else {
     remote = `${binding.remotePath}/${raw}`
   }
   const normalized = path.posix.normalize(remote.replace(/\\/g, '/'))
   return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized
+}
+
+/**
+ * target 位于 root 之下时返回 POSIX 形式的相对路径（root 本身为 ''），否则 undefined。
+ * 字面路径与 realpath 两种写法都试：家目录 / DSH_HOME 可能是符号链接（Linux /home → /data/home、
+ * macOS /var → /private/var），会话 cwd 与登记时的写法未必一致。Windows 的 path.relative 本身不区分大小写。
+ */
+function localRelative(root: string, target: string): string | undefined {
+  const real = (p: string): string => {
+    try {
+      return realpathSync.native(p)
+    } catch {
+      return p
+    }
+  }
+  for (const r of [root, real(root)]) {
+    for (const t of [target, real(target)]) {
+      const rel = path.relative(r, t)
+      if (rel === '') return ''
+      if (!rel.startsWith('..') && !path.isAbsolute(rel)) return rel.split(path.sep).join('/')
+      // macOS：posix 的 path.relative 区分大小写，文件系统却不区分。只按不区分大小写比较根部分，
+      // 余下部分保留原样（它要发往远端，远端 Linux 区分大小写）。
+      if (process.platform === 'darwin') {
+        const rr = r.replace(/\/+$/, '')
+        const lower = t.toLowerCase()
+        if (lower === rr.toLowerCase()) return ''
+        if (lower.startsWith(`${rr.toLowerCase()}/`)) return t.slice(rr.length + 1)
+      }
+    }
+  }
+  return undefined
 }
 
 function isWindowsAbsolute(p: string): boolean {

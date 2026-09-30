@@ -365,6 +365,14 @@ describe('信任围栏', () => {
   it('缺 Host → 拒绝', () => {
     expect(isTrustedRequest(req({}), [])).toBe(false)
   })
+
+  it('回环名视为同一族：localhost 页面访问 127.0.0.1 服务放行（含 cross-site 标记），外站仍拒绝', () => {
+    expect(isTrustedRequest(req({ host: '127.0.0.1:52011', origin: 'http://localhost:43120', 'sec-fetch-site': 'cross-site' }), [])).toBe(true)
+    expect(isTrustedRequest(req({ host: '127.0.0.1:52011', origin: 'http://127.0.0.1:43120', 'sec-fetch-site': 'same-site' }), [])).toBe(true)
+    expect(isTrustedRequest(req({ host: 'localhost:52011', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' }), [])).toBe(false)
+    // 局域网信任地址不属于回环族：Origin 必须同主机名
+    expect(isTrustedRequest(req({ host: '192.168.3.5:43120', origin: 'http://localhost:1' }), ['192.168.3.5'])).toBe(false)
+  })
 })
 
 // ------------------------------------------------------------------ 协议

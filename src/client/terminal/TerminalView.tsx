@@ -9,10 +9,13 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import type { TerminalView as TerminalInfo } from '../../wire/dto.js'
 import type { Translate } from '../context.js'
-import { TerminalLink, terminalSocketUrl } from './link.js'
+import { hostStreamBaseUrl, TerminalLink, terminalSocketUrl } from './link.js'
 import { onHostThemeChange, themeFromHost } from './theme.js'
 
 export type LinkState = 'connecting' | 'open' | 'reconnecting' | 'gone'
+
+/** 当前是否 macOS（决定快捷键用 ⌘ 还是 Ctrl、Option 是否当 Meta）。 */
+export const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)
 
 export interface TerminalViewProps {
   t: Translate
@@ -134,7 +137,10 @@ export function TerminalView(props: TerminalViewProps) {
       fontSize: 13,
       cursorBlink: true,
       allowProposedApi: true,
-      convertEol: false
+      convertEol: false,
+      // macOS：Option 当 Meta 用（bash/zsh 的 Alt+B/F/D 按词移动），否则会输出 ∫ƒ∂；Option+点击强制选中文字。
+      macOptionIsMeta: IS_MAC,
+      macOptionClickForcesSelection: IS_MAC
     })
     const fit = new FitAddon()
     const search = new SearchAddon()
@@ -145,22 +151,27 @@ export function TerminalView(props: TerminalViewProps) {
     fitRef.current = fit
     searchRef.current = search
 
-    // 快捷键：Ctrl/Cmd+F 搜索；Ctrl+Shift+C 复制选区；Ctrl+Shift+V 粘贴。
-    // 普通 Ctrl+C 必须原样发给远端（中断进程），不能被复制功能劫持。
+    // 快捷键：搜索 = macOS ⌘F / 其他 Ctrl+F；Ctrl+Shift+C 复制选区；Ctrl+Shift+V 粘贴（macOS 用系统的 ⌘C / ⌘V）。
+    // 普通 Ctrl+C 必须原样发给远端（中断进程）；macOS 上 Ctrl+F 也要留给 readline / vim / less（前进一字符 / 翻页）。
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
-      const mod = event.ctrlKey || event.metaKey
-      if (mod && !event.shiftKey && event.key.toLowerCase() === 'f') {
+      const findMod = IS_MAC ? event.metaKey : event.ctrlKey
+      if (findMod && !event.shiftKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
         setSearchOpen(true)
         setTimeout(() => searchInputRef.current?.focus(), 0)
         return false
       }
+      // 返回 false 只让 xterm 不处理，不会取消浏览器默认行为：不 preventDefault 的话，
+      // Chromium 的 Ctrl+Shift+V（粘贴为纯文本）还会再触发一次 paste，内容被粘两遍。
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'c') {
+        event.preventDefault()
         const selection = term.getSelection()
         if (selection !== '') void navigator.clipboard?.writeText(selection)
         return false
       }
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'v') {
+        event.preventDefault()
         void navigator.clipboard?.readText().then((text) => term.paste(text))
         return false
       }
@@ -169,7 +180,7 @@ export function TerminalView(props: TerminalViewProps) {
 
     const makeLink = (): TerminalLink =>
       new TerminalLink(
-        terminalSocketUrl(props.terminalId, window.location),
+        terminalSocketUrl(props.terminalId, window.location, hostStreamBaseUrl()),
         {
           onAttach: () => {
             // 每次接入服务端都会整段回放 scrollback，先清屏避免内容重复。
@@ -344,11 +355,11 @@ export function TerminalView(props: TerminalViewProps) {
           onPointerDown={(e) => e.stopPropagation()}
         >
           {[
-            { id: 'copy', label: t('term.menuCopy'), hint: 'Ctrl+Shift+C', disabled: !menu.hasSelection },
-            { id: 'paste', label: t('term.menuPaste'), hint: 'Ctrl+Shift+V' },
+            { id: 'copy', label: t('term.menuCopy'), hint: IS_MAC ? '⌘C' : 'Ctrl+Shift+C', disabled: !menu.hasSelection },
+            { id: 'paste', label: t('term.menuPaste'), hint: IS_MAC ? '⌘V' : 'Ctrl+Shift+V' },
             { id: 'selectAll', label: t('term.menuSelectAll') },
             { id: 'sep1' },
-            { id: 'find', label: t('term.menuFind'), hint: 'Ctrl+F' },
+            { id: 'find', label: t('term.menuFind'), hint: IS_MAC ? '⌘F' : 'Ctrl+F' },
             { id: 'clear', label: t('term.menuClear') },
             { id: 'sep2' },
             {

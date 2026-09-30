@@ -168,4 +168,12 @@ describe('terminalSocketUrl', () => {
       'wss://dsh.example/dsh-workspace/ws/terminal?id=x'
     )
   })
+
+  it('桌面版给了 streamBaseUrl 时连宿主服务地址，而不是页面地址', () => {
+    expect(terminalSocketUrl('x', { protocol: 'dsh-app:', host: 'app' }, 'http://127.0.0.1:52011/')).toBe(
+      'ws://127.0.0.1:52011/dsh-workspace/ws/terminal?id=x'
+    )
+    // 非法地址退回页面地址
+    expect(terminalSocketUrl('x', { protocol: 'http:', host: '127.0.0.1:1' }, 'not a url')).toBe('ws://127.0.0.1:1/dsh-workspace/ws/terminal?id=x')
+  })
 })

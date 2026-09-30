@@ -8,7 +8,22 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Translate } from '../context.js'
-import { IconArrowUp, IconChevron, IconDrive, IconFolder, IconHome, IconPencil, IconRefresh } from '../sidebar/ui.js'
+import { IconAlert, IconArrowUp, IconChevron, IconClose, IconDrive, IconFolder, IconHome, IconPencil, IconRefresh } from '../sidebar/ui.js'
+import { classifyBrowseError, type BrowseErrorInfo } from './browse-error.js'
+
+/** 一次失败：info 为归类结果；target 为列目录的路径或新建的名称（标题与「重试」用）。 */
+interface BrowseFailure {
+  info: BrowseErrorInfo
+  target: string | undefined
+  op: 'list' | 'mkdir' | 'input'
+}
+
+/** 路径最后一段（出错标题用；与文件末尾的 lastSegment 同义，这里避免提前引用）。 */
+function tailName(p: string): string {
+  const trimmed = p.replace(/[\\/]+$/, '')
+  const idx = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'))
+  return (idx === -1 ? trimmed : trimmed.slice(idx + 1)) || p
+}
 
 export interface FolderEntry {
   name: string
@@ -62,7 +77,8 @@ export function FolderBrowser(props: FolderBrowserProps) {
   const { t } = props
   const [listing, setListing] = useState<FolderListing | null>(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<BrowseFailure | null>(null)
+  const [showDetail, setShowDetail] = useState(false)
   const [editing, setEditing] = useState(false)
   const [typed, setTyped] = useState('')
   const [creating, setCreating] = useState<string | null>(null)
@@ -77,6 +93,7 @@ export function FolderBrowser(props: FolderBrowserProps) {
     abortRef.current = controller
     setLoading(true)
     setError(null)
+    setShowDetail(false)
     try {
       const next = await latest.current.backend.list(target, controller.signal)
       if (controller.signal.aborted) return
@@ -86,7 +103,8 @@ export function FolderBrowser(props: FolderBrowserProps) {
       latest.current.onPathChange(next.virtual === true ? undefined : next.path)
     } catch (err) {
       if (controller.signal.aborted) return
-      if (latest.current.onError?.(err) !== true) setError(err instanceof Error ? err.message : String(err))
+      // 进不去的子目录不清空当前列表：留在原目录，顶部提示原因。
+      if (latest.current.onError?.(err) !== true) setError({ info: classifyBrowseError(err), target, op: 'list' })
     } finally {
       if (!controller.signal.aborted) setLoading(false)
     }
@@ -113,15 +131,17 @@ export function FolderBrowser(props: FolderBrowserProps) {
     const name = (creating ?? '').trim()
     if (listing === null || props.backend.mkdir === undefined || name === '') return
     if (name === '.' || name === '..' || /[/\\]/.test(name)) {
-      setError(t('dialog.badName'))
+      setError({ info: { kind: 'other', detail: '' }, target: name, op: 'input' })
       return
     }
+    setError(null)
     try {
       const created = await props.backend.mkdir(listing.path, name)
       setCreating(null)
       await load(created)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setShowDetail(false)
+      setError({ info: classifyBrowseError(err), target: name, op: 'mkdir' })
     }
   }
 
@@ -131,6 +151,51 @@ export function FolderBrowser(props: FolderBrowserProps) {
   }
 
   const entries = (listing?.entries ?? []).filter((e) => props.showHidden || !e.hidden)
+
+  /** 错误横幅：标题说清「哪个操作、对谁」失败，说明给出可能原因，原始信息折叠在「详情」里。 */
+  const renderError = (e: BrowseFailure) => {
+    const name = e.target === undefined ? t('add.placeHome') : tailName(e.target)
+    const title =
+      e.op === 'input'
+        ? t('dialog.badName')
+        : e.op === 'mkdir'
+          ? e.info.kind === 'exists'
+            ? t('add.errExists', { name })
+            : t('add.errMkdir', { name })
+          : t('add.errOpen', { name })
+    const hint =
+      e.info.kind === 'outdated' ? t('add.errOutdatedHint') : e.op === 'list' && e.info.kind === 'unreadable' ? t('add.errUnreadableHint') : undefined
+    const retryTarget = e.op === 'list' ? e.target : undefined
+    // 从未列成功（远程连不上等）时才用外层的 retryable；子目录进不去总能重试。
+    const canRetry = e.op === 'list' && (listing !== null || props.retryable === true)
+    return (
+      <div className="dshws-fb-error" role="alert">
+        <IconAlert size={16} />
+        <div className="dshws-fb-error-body">
+          <div className="dshws-fb-error-title">{title}</div>
+          {hint !== undefined ? <div className="dshws-fb-error-hint">{hint}</div> : null}
+          {showDetail && e.info.detail !== '' ? <div className="dshws-fb-error-detail dshws-mono">{e.info.detail}</div> : null}
+          <div className="dshws-fb-error-actions">
+            {canRetry ? (
+              <button type="button" className="dshws-link-btn" onClick={() => void load(retryTarget ?? listing?.path ?? props.initialPath)}>
+                {t('add.retry')}
+              </button>
+            ) : null}
+            {e.info.detail !== '' ? (
+              <button type="button" className="dshws-link-btn" aria-expanded={showDetail} onClick={() => setShowDetail(!showDetail)}>
+                {showDetail ? t('add.errHideDetail') : t('add.errShowDetail')}
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {listing !== null ? (
+          <button type="button" className="dshws-ibtn dshws-fb-error-close" title={t('common.close')} aria-label={t('common.close')} onClick={() => setError(null)}>
+            <IconClose size={12} />
+          </button>
+        ) : null}
+      </div>
+    )
+  }
 
   return (
     <div className="dshws-fb">
@@ -219,23 +284,14 @@ export function FolderBrowser(props: FolderBrowserProps) {
         </div>
       ) : null}
 
+      {/* 放在滚动列表外：列表滚到哪都看得到；列表本身保留原目录内容 */}
+      {error !== null ? renderError(error) : null}
+
       <div className="dshws-fb-list" role="listbox" data-loading={loading}>
         {loading && listing === null ? (
           <div className="dshws-fb-connecting">
             <span className="dshws-spinner" aria-hidden="true" />
             <span>{props.loadingLabel ?? t('files.loading')}</span>
-          </div>
-        ) : null}
-        {error !== null ? (
-          <div className="dshws-fb-note" data-tone="error">
-            {error}
-            {props.retryable === true ? (
-              <div>
-                <button type="button" className="dshws-link-btn" onClick={() => void load(listing?.path ?? props.initialPath)}>
-                  {t('add.retry')}
-                </button>
-              </div>
-            ) : null}
           </div>
         ) : null}
         {listing !== null && entries.length === 0 && !loading && error === null ? <div className="dshws-fb-note">{t('add.emptyDir')}</div> : null}

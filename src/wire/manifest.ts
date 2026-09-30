@@ -139,7 +139,11 @@ const INPUTS: Record<MethodName, z.ZodType> = {
   remoteWorkspaces: z.object({}),
   previewUrl: z.object({ hostId: id, path: remotePath }),
   git: gitSchema(),
-  setAutoUnlock: z.object({ enabled: z.boolean(), password: z.string().max(1024).optional() })
+  setAutoUnlock: z.object({ enabled: z.boolean(), password: z.string().max(1024).optional() }),
+  // 本地路径是否绝对、是否规范由 local/browse.ts 校验（Windows 与 POSIX 规则不同）。
+  localList: z.object({ path: z.string().max(4096).optional() }),
+  localMkdir: z.object({ parent: z.string().min(1).max(4096), name: fileName }),
+  sftpReadData: z.object({ hostId: id, path: remotePath })
 }
 
 /** 远程 Git 各操作的输入校验（路径是否在仓库内由 RemoteGit 再校验一次）。 */

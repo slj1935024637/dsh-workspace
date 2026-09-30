@@ -3,7 +3,8 @@
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/vault/store.ts
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { renameWithRetry } from '../fs-atomic.js'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type {
@@ -146,10 +147,12 @@ export class Vault {
   /** 原子写盘：先写临时文件再 rename，避免写一半断电损坏保险箱。 */
   private persist(): void {
     const file = vaultFile()
-    mkdirSync(path.dirname(file), { recursive: true })
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
-    writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf8')
-    renameSync(tmp, file)
+    // macOS / Linux：主机名、用户名、密钥路径等明文字段只给本用户读（umask 022 下默认是 0644）；Windows 忽略 mode。
+    // 已有的 known-hosts / bindings / terminals / prefs 同样按 0600 写、目录 0700 建。
+    writeFileSync(tmp, JSON.stringify(this.data, null, 2), { encoding: 'utf8', mode: 0o600 })
+    renameWithRetry(tmp, file)
   }
 
   // ---------------------------------------------------------------- 锁状态
@@ -725,5 +728,5 @@ function viewGroup(stored: StoredGroup): GroupView {
 
 /** 确保插件数据目录存在。 */
 export function ensurePluginRoot(): void {
-  mkdirSync(pluginRoot(), { recursive: true })
+  mkdirSync(pluginRoot(), { recursive: true, mode: 0o700 })
 }

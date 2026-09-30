@@ -9,7 +9,8 @@
  * 非 Windows 没有等价的自带能力：退化为只有本人可读（0600）的文件，界面上明确说明。
  */
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { renameWithRetry } from '../fs-atomic.js'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
@@ -24,15 +25,32 @@ export interface KeyProtector {
 /** DPAPI 的附加熵：同一账号下别的程序用 DPAPI 保存的数据不会与这里混用。 */
 const ENTROPY = 'dsh-workspace/vault-key/v1'
 
+/**
+ * Windows PowerShell 的绝对路径：不依赖 PATH（DSH 被精简过 PATH 的环境启动时找不到 powershell.exe）。
+ * SystemRoot 缺失时才退回 PATH 查找。
+ */
+export function powershellPath(env: NodeJS.ProcessEnv = process.env): string {
+  const root = env.SystemRoot ?? env.SYSTEMROOT ?? env.windir
+  return root !== undefined && root !== '' ? path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell.exe'
+}
+
 function runPowerShell(script: string, input: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(
-      'powershell.exe',
+      powershellPath(),
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
       { windowsHide: true, timeout: 20_000, maxBuffer: 1 << 20 },
       (error, stdout, stderr) => {
-        if (error !== null) reject(new Error(`DPAPI 调用失败：${(stderr || error.message).trim()}`))
-        else resolve(stdout.trim())
+        if (error === null) {
+          resolve(stdout.trim())
+          return
+        }
+        const detail = (stderr || error.message).trim()
+        // AppLocker / 受限语言模式（ConstrainedLanguage）会禁止 Add-Type，给出能看懂的原因而不是一长串 PowerShell 报错。
+        const hint = /Add-Type|language mode|ConstrainedLanguage|无法调用方法|Cannot invoke method/i.test(detail)
+          ? '（系统策略限制了 PowerShell，如 AppLocker / 受限语言模式；无法使用 Windows 加密保存密钥，请保持关闭自动解锁）'
+          : ''
+        reject(new Error(`DPAPI 调用失败${hint}：${detail}`))
       }
     )
     child.stdin?.end(input)
@@ -99,7 +117,7 @@ export class AutoUnlockStore {
     mkdirSync(path.dirname(file), { recursive: true })
     const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
     writeFileSync(tmp, JSON.stringify(shape), { encoding: 'utf8', mode: 0o600 })
-    renameSync(tmp, file)
+    renameWithRetry(tmp, file)
     try {
       chmodSync(file, 0o600)
     } catch {

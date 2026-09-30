@@ -484,6 +484,25 @@ export const CSS = `
 .dshws-fb-list[data-loading="true"] { opacity: .6; }
 .dshws-fb-note { padding: 16px 10px; font-size: 12px; color: var(--dsw-alias-label-tertiary); text-align: center; }
 .dshws-fb-note[data-tone="error"] { color: var(--dsw-alias-state-error-primary); text-align: left; white-space: pre-wrap; word-break: break-word; }
+/* 目录浏览错误横幅：在工具栏与列表之间，淡红底 + 图标；原始报错折叠在「详情」里 */
+.dshws-fb-error {
+  display: flex; align-items: flex-start; gap: 8px; margin: 8px 8px 0; padding: 8px 6px 8px 10px; border-radius: 8px; min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent);
+  font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-primary);
+}
+.dshws-fb-error > svg { flex-shrink: 0; margin-top: 2px; color: var(--dsw-alias-state-error-primary); }
+.dshws-fb-error-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dshws-fb-error-title { font-weight: 500; overflow-wrap: anywhere; }
+.dshws-fb-error-hint { color: var(--dsw-alias-label-secondary); }
+.dshws-fb-error-detail {
+  margin-top: 4px; padding: 6px 8px; border-radius: 6px; max-height: 96px; overflow: auto; user-select: text;
+  background: var(--dsw-alias-bg-layer-1); font-size: 11.5px; color: var(--dsw-alias-label-secondary); white-space: pre-wrap; word-break: break-all;
+}
+.dshws-fb-error-actions { display: flex; gap: 12px; margin-top: 2px; }
+.dshws-fb-error-actions:empty { display: none; }
+.dshws-fb-error-actions .dshws-link-btn { font-size: 12px; }
+.dshws-fb-error-close { flex-shrink: 0; width: 22px !important; height: 22px !important; }
 .dshws-fb-item {
   display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 6px;
   background: transparent; cursor: pointer; text-align: left; font-size: 13px; color: var(--dsw-alias-label-primary);

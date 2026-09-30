@@ -65,15 +65,24 @@ export function isTrustedRequest(request: TrustRequest, trustedHosts: readonly s
   const hostUrl = parseAuthority(host)
   if (hostUrl === undefined) return false
   if (!isLoopbackHostname(hostUrl.hostname) && !isTrustedAuthority(hostUrl, trustedHosts)) return false
-  if (header(request.headers, 'sec-fetch-site') === 'cross-site') return false
   // 浏览器带了 Origin 就必须与 Host 同一主机名。比较 hostname 而非 host：
-  // 部分 Chromium 版本对非默认端口的回环页面序列化 Origin 时不带端口。
+  // 部分 Chromium 版本对非默认端口的回环页面序列化 Origin 时不带端口；桌面版页面与宿主服务也可能端口不同。
+  // 回环名视为同一族（localhost / 127.x / [::1]）：桌面版页面可能用 localhost、宿主服务地址用 127.0.0.1，
+  // 两者都只能来自本机，放行不扩大暴露面（原本 127.0.0.1 任意端口的页面就能通过）。
   // 字面量 "null"（沙箱 iframe、file: 页面）是不透明来源，拒绝。
   const origin = header(request.headers, 'origin')
-  if (origin === undefined) return true
-  try {
-    return new URL(origin).hostname === hostUrl.hostname
-  } catch {
-    return false
+  let originHost: string | undefined
+  if (origin !== undefined) {
+    try {
+      originHost = new URL(origin).hostname
+    } catch {
+      return false
+    }
+    if (originHost === '') return false
   }
+  const loopbackPair = originHost !== undefined && isLoopbackHostname(originHost) && isLoopbackHostname(hostUrl.hostname)
+  // localhost → 127.0.0.1 在浏览器看来是 cross-site；只对「双方都是回环」的情况放行。
+  if (header(request.headers, 'sec-fetch-site') === 'cross-site' && !loopbackPair) return false
+  if (originHost === undefined) return true
+  return loopbackPair || originHost === hostUrl.hostname
 }

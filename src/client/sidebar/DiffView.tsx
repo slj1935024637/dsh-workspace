@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type * as MonacoApi from 'monaco-editor'
 import type { Translate } from '../context.js'
-import { languageFor, loadMonaco, type AssetFetcher } from '../files/monaco-loader.js'
+import { ensureMonacoCss, languageFor, loadMonaco, type AssetFetcher } from '../files/monaco-loader.js'
 import { isLight, resolveColor } from '../terminal/theme.js'
 
 export interface DiffViewProps {
@@ -29,6 +29,7 @@ export function DiffView(props: DiffViewProps) {
     loadMonaco(props.fetchAsset)
       .then((monaco) => {
         if (disposed || hostRef.current === null) return
+        ensureMonacoCss(hostRef.current)
         const bg = resolveColor('var(--dsw-alias-bg-layer-1)', '#1e1e1e')
         monaco.editor.setTheme(isLight(bg) ? 'vs' : 'vs-dark')
         const name = props.path.slice(props.path.lastIndexOf('/') + 1)

@@ -4,6 +4,8 @@
  * @FilePath: /dsh-workspace/src/ssh/connection.ts
  */
 import { readFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { Duplex } from 'node:stream'
 import type { ConnectionStatus, HostProxy, ResolvedTarget } from '../types.js'
 import type { ConnectionLog } from '../log/connection-log.js'
@@ -199,7 +201,7 @@ function applyAuth(config: Record<string, unknown>, target: ResolvedTarget): voi
     case 'keyPath':
       // 私钥读取失败要抛在这里，比让 ssh2 报一个含糊的认证错误清楚得多。
       try {
-        config.privateKey = readFileSync(auth.keyPath)
+        config.privateKey = readFileSync(expandHome(auth.keyPath))
       } catch (cause) {
         throw new Error(`无法读取私钥文件：${auth.keyPath}`, { cause })
       }
@@ -210,10 +212,15 @@ function applyAuth(config: Record<string, unknown>, target: ResolvedTarget): voi
       if (auth.passphrase !== undefined) config.passphrase = auth.passphrase
       break
     case 'agent':
-      // ssh-agent 在 P0 范围外，但保留这条分支避免类型收窄时漏掉。
-      config.agent = process.env.SSH_AUTH_SOCK
+      // 表单已不提供 agent，旧数据 / 导入仍可能带进来。Windows 没有 SSH_AUTH_SOCK，用 OpenSSH for Windows 的命名管道。
+      config.agent = process.env.SSH_AUTH_SOCK ?? (process.platform === 'win32' ? '\\\\.\\pipe\\openssh-ssh-agent' : undefined)
       break
   }
+}
+
+/** 展开开头的 ~（`~/.ssh/id_ed25519`）：界面示例就是这种写法，而 readFileSync 不认 ~。 */
+export function expandHome(p: string): string {
+  return /^~(?=$|[\\/])/.test(p) ? path.join(os.homedir(), p.slice(1)) : p
 }
 
 /** 通过 SOCKS5 / HTTP CONNECT 代理建立到目标的 socket。 */

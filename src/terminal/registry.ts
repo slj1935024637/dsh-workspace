@@ -4,7 +4,8 @@
  * @FilePath: /dsh-workspace/src/terminal/registry.ts
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { renameWithRetry } from '../fs-atomic.js'
 import path from 'node:path'
 import type { ConnectionLog } from '../log/connection-log.js'
 import { Scrollback } from './scrollback.js'
@@ -326,10 +327,10 @@ export class TerminalRegistry {
       .filter((s) => s.status !== 'exited')
       .map((s) => ({ hostId: s.hostId, title: s.title, ...(s.cwd !== undefined ? { cwd: s.cwd } : {}) }))
     try {
-      mkdirSync(path.dirname(file), { recursive: true })
+      mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
       const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
-      writeFileSync(tmp, JSON.stringify({ version: 1, terminals: entries }, null, 2), 'utf8')
-      renameSync(tmp, file)
+      writeFileSync(tmp, JSON.stringify({ version: 1, terminals: entries }, null, 2), { encoding: 'utf8', mode: 0o600 })
+      renameWithRetry(tmp, file)
     } catch (error) {
       // 记录失败只影响「下次重开」这个便利功能，不能让终端本身失败，但要留痕。
       this.log.warn('', 'terminal', '保存终端列表失败。', error instanceof Error ? error.message : String(error))

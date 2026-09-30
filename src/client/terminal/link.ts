@@ -32,10 +32,31 @@ export interface TerminalLinkHandlers {
 const OPEN = 1
 const BACKOFF_MS = [500, 1000, 2000, 4000, 8000]
 
-export function terminalSocketUrl(terminalId: string, location: { protocol: string; host: string }): string {
-  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${scheme}//${location.host}${TERMINAL_WS_PATH}?id=${encodeURIComponent(terminalId)}`
+/**
+ * 终端 WebSocket 地址。
+ * DSH 桌面版的页面可以不由宿主 HTTP 服务提供（页面来源 ≠ 宿主地址），此时宿主通过
+ * `__DSH_TRANSPORT__.streamBaseUrl` 告知真正的服务地址，宿主自己的流通道也是这么取的
+ * （dsh-api-gateway 的 remoteStreamUrl）。只用 window.location 在这种页面上会连到错误的地址，
+ * 表现为终端一直「连接中断，正在重连」，而走 RPC 的 SFTP 列目录一切正常。
+ * @param streamBaseUrl 宿主提供的服务地址；缺省时用页面地址。
+ */
+export function terminalSocketUrl(terminalId: string, location: { protocol: string; host: string }, streamBaseUrl?: string): string {
+  let protocol = location.protocol
+  let host = location.host
+  if (streamBaseUrl !== undefined && streamBaseUrl !== '') {
+    try {
+      const base = new URL(streamBaseUrl)
+      protocol = base.protocol
+      host = base.host
+    } catch {
+      /* 地址不合法就退回页面地址 */
+    }
+  }
+  const scheme = protocol === 'https:' || protocol === 'wss:' ? 'wss:' : 'ws:'
+  return `${scheme}//${host}${TERMINAL_WS_PATH}?id=${encodeURIComponent(terminalId)}`
 }
+
+export { hostStreamBaseUrl } from '../host-url.js'
 
 /**
  * 一条到指定终端的连接。
@@ -104,6 +125,8 @@ export class TerminalLink {
   }
 
   private scheduleReconnect(): void {
+    // 首次失败时在控制台留下目标地址：连不上的原因（地址错 / 被信任围栏拒绝）只能靠它和插件日志区分。
+    if (this.attempt === 0) console.warn(`[dsh-workspace] 终端连接断开，正在重连：${this.url.replace(/\?.*$/, '')}`)
     const delay = BACKOFF_MS[Math.min(this.attempt, BACKOFF_MS.length - 1)] as number
     this.attempt += 1
     this.handlers.onLinkState('reconnecting')

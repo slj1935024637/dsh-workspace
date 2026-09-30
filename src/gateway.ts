@@ -22,6 +22,18 @@ import { RemoteConflictError, RemoteExistsError, normalizeRemotePath } from './s
 import { DEFAULT_IGNORE } from './sftp/ignore.js'
 import { insideRoot, previewUrl } from './preview-route.js'
 import { GitError, RemoteGit } from './git/remote-git.js'
+import { LocalBrowseError, listLocalDirectory, makeLocalDirectory } from './local/browse.js'
+
+/**
+ * 本机浏览错误 → 远程错误。消息沿用宿主 DirectoryBrowseError 的格式（`directory-picker/<kind>: ...`），
+ * 浏览器端 classifyBrowseError / isEmptyDirQuirk 对两种来源一视同仁。
+ */
+function localRemote(error: unknown): unknown {
+  if (!(error instanceof LocalBrowseError)) return error
+  const kind = error.kind === 'invalid' ? 'unreadable' : error.kind
+  const code = error.kind === 'exists' ? ERROR_CODES.exists : ERROR_CODES.failed
+  return new RemoteError(code, `directory-picker/${kind}: ${error.message}`, {})
+}
 
 /** 新建主机测试时的临时 id（不会进入保险箱）。 */
 const DRAFT_ID = '__draft__'
@@ -540,6 +552,11 @@ export class WorkspaceGateway extends RemoteService {
     return fresh
   }
 
+  /** 单个内联资源的上限：远程调用是整包 JSON（base64 再膨胀 1/3），太大的图片 / 字体直接放弃内联。 */
+  sftpReadData(input: In<'sftpReadData'>): Out<'sftpReadData'> {
+    return this.guard(() => this.rt.files.readData(this.requireHost(input.hostId), input.path, 8 * 1024 * 1024))
+  }
+
   sftpWrite(input: In<'sftpWrite'>): Out<'sftpWrite'> {
     return this.guard(() =>
       this.rt.files.writeText(this.requireHost(input.hostId), input.path, input.content, input.expectedMtime)
@@ -689,6 +706,23 @@ export class WorkspaceGateway extends RemoteService {
       } catch (error) {
         if (error instanceof GitError) throw new RemoteError(ERROR_CODES.failed, error.message, {})
         throw error
+      }
+    })
+  }
+
+  // ---------------------------------------------------------------- 本机目录（添加工作区兜底）
+
+  /** 宿主目录选择器只有 native 能力时（macOS 桌面版），「添加工作区」的应用内浏览走这里。 */
+  localList(input: In<'localList'>): Out<'localList'> {
+    return this.guard(() => listLocalDirectory(input.path).catch((error: unknown) => Promise.reject(localRemote(error))))
+  }
+
+  localMkdir(input: In<'localMkdir'>): Out<'localMkdir'> {
+    return this.guard(async () => {
+      try {
+        return { path: await makeLocalDirectory(input.parent, input.name) }
+      } catch (error) {
+        throw localRemote(error)
       }
     })
   }

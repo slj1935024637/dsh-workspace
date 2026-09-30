@@ -3,7 +3,8 @@
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/prefs.ts
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { renameWithRetry } from './fs-atomic.js'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { pluginRoot } from './paths.js'
@@ -55,10 +56,10 @@ export class PrefsStore {
 
   private save(next: Prefs): Prefs {
     const file = prefsFile()
-    mkdirSync(path.dirname(file), { recursive: true })
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const tmp = `${file}.${randomUUID().slice(0, 8)}.tmp`
-    writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8')
-    renameSync(tmp, file)
+    writeFileSync(tmp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 })
+    renameWithRetry(tmp, file)
     this.data = next
     return next
   }
