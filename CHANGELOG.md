@@ -4,6 +4,8 @@
 
 ## 未发布
 
+## 0.11.0（2026-09-30）
+
 - 新增：全局配置里的「更新」卡片。
   - 检查更新：先直连 GitHub（`releases/latest` API，失败时改读发布页跳转地址），再不通回退 npm 官方源（`registry.npmjs.org`，不用同步滞后的 npmmirror）。
   - 下载并更新：安装包下载到 `~/.dsh/workspaces/updates/`，按发布页的 sha256（npm 来源用 sha512 integrity）校验，再检查包名、版本与插件声明，然后交给 DSH 插件管理器安装。
