@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 页面状态 —— 轮询宿主快照、统一错误路由、暴露操作
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/useWorkspace.ts
@@ -63,7 +63,7 @@ export function useWorkspace(api: WorkspaceApi): WorkspaceModel {
   const [hostKeyAlert, setHostKeyAlert] = useState<HostKeyAlert | null>(null)
   const alive = useRef(true)
 
-  const refresh = useCallback(async () => {
+  const fetchState = async (): Promise<void> => {
     try {
       const next = await api.call('state', {})
       if (!alive.current) return
@@ -74,8 +74,22 @@ export function useWorkspace(api: WorkspaceApi): WorkspaceModel {
     } finally {
       if (alive.current) setLoading(false)
     }
-  }, [api])
+  }
 
+  // 上一次 state 还没回来就不再发，而是等它：请求在浏览器里排队时（并发连接被占满），
+  // 每 3 秒无条件轮询会越堆越多，连接空出来后又一起涌上去。
+  const inflight = useRef<Promise<void> | null>(null)
+  const refresh = useCallback(async () => {
+    if (inflight.current !== null) return await inflight.current
+    const run = fetchState()
+    inflight.current = run
+    try {
+      await run
+    } finally {
+      inflight.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api])
   useEffect(() => {
     alive.current = true
     void refresh()

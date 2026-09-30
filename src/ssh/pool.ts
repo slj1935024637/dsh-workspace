@@ -53,8 +53,27 @@ export function isTransientSshError(error: unknown): boolean {
   if (typeof error === 'object' && error !== null) {
     // ssh2 在认证阶段失败时给 error.level = 'client-authentication'。
     if ((error as { level?: unknown }).level === 'client-authentication') return false
+    if (isUnreachableError(error)) return false
   }
   return true
+}
+
+/** 「主机连不上」类的网络错误码：对端拒绝、不可达、域名解析失败、TCP 连接超时。 */
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EHOSTDOWN', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT'])
+
+/**
+ * 主机连不上（而不是连上之后又断了）。这类错误不重试：
+ * 原先按 5 次 × 20 秒握手超时重试，一个请求要挂约 107 秒；界面上来回切换主机时，
+ * 这些挂着的请求会占满浏览器对同一地址的 6 个并发连接，连带正常主机与状态轮询全部排队卡住。
+ * 连接中途断开（ECONNRESET、握手前连接丢失）仍按原策略重试 —— 那种多半是网络抖动。
+ */
+export function isUnreachableError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const e = error as { code?: unknown; level?: unknown; message?: unknown }
+  if (typeof e.code === 'string' && UNREACHABLE_CODES.has(e.code)) return true
+  // ssh2 的握手超时：level = 'client-timeout'（"Timed out while waiting for handshake"）。
+  if (e.level === 'client-timeout') return true
+  return typeof e.message === 'string' && /Timed out while waiting for handshake/i.test(e.message)
 }
 
 const DEFAULT_MAX_ATTEMPTS = 5

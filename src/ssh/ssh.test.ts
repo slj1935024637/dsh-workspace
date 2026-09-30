@@ -129,6 +129,31 @@ describe('连接池', () => {
     pool.dispose()
   })
 
+  it('主机连不上（拒绝 / 不可达 / 解析失败 / 握手超时）不重试；连接中途断开仍重试', async () => {
+    const unreachable = [
+      Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:22'), { code: 'ECONNREFUSED' }),
+      Object.assign(new Error('connect EHOSTUNREACH'), { code: 'EHOSTUNREACH' }),
+      Object.assign(new Error('getaddrinfo ENOTFOUND nope'), { code: 'ENOTFOUND' }),
+      Object.assign(new Error('Timed out while waiting for handshake'), { level: 'client-timeout' })
+    ]
+    for (const error of unreachable) {
+      const pool = new SshPool(new KnownHosts(), new ConnectionLog(), { maxReconnectAttempts: 5, reconnectBaseDelayMs: 1 })
+      const resolve = vi.fn<() => ResolvedTarget>(() => {
+        throw error
+      })
+      await expect(pool.acquire('h1', 'file', resolve)).rejects.toBe(error)
+      expect(resolve).toHaveBeenCalledTimes(1)
+      pool.dispose()
+    }
+    const pool = new SshPool(new KnownHosts(), new ConnectionLog(), { maxReconnectAttempts: 3, reconnectBaseDelayMs: 1 })
+    const reset = vi.fn<() => ResolvedTarget>(() => {
+      throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+    })
+    await expect(pool.acquire('h1', 'file', reset)).rejects.toThrow(/ECONNRESET/)
+    expect(reset).toHaveBeenCalledTimes(3)
+    pool.dispose()
+  })
+
   it('指纹变更不重试', async () => {
     const pool = new SshPool(new KnownHosts(), new ConnectionLog(), {
       maxReconnectAttempts: 5,

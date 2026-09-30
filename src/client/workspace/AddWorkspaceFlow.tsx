@@ -180,6 +180,31 @@ function readFolded(): Record<string, boolean> {
 
 type RemotePhase = { hostId: string; phase: 'connecting' | 'ready' | 'error' }
 
+/**
+ * 远程家目录：同一台主机进行中的请求复用，成功结果记住（家目录不会变）。
+ * 在连不上与连得上的主机之间来回点时，每点一次都新发一个 sftpHome，
+ * 挂着的请求会占满浏览器对同一地址的并发连接（HTTP/1.1 每个来源 6 个），正常主机与状态轮询都得排队。
+ */
+const homeInflight = new Map<string, Promise<string>>()
+const homeKnown = new Map<string, string>()
+
+function remoteHome(api: AddWorkspaceFlowProps['api'], hostId: string): Promise<string> {
+  const known = homeKnown.get(hostId)
+  if (known !== undefined) return Promise.resolve(known)
+  let pending = homeInflight.get(hostId)
+  if (pending === undefined) {
+    pending = api
+      .call('sftpHome', { hostId })
+      .then((r) => {
+        homeKnown.set(hostId, r.path)
+        return r.path
+      })
+      .finally(() => homeInflight.delete(hostId))
+    homeInflight.set(hostId, pending)
+  }
+  return pending
+}
+
 export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
   const { t, api } = props
   const [visible, setVisible] = useState(false)
@@ -391,7 +416,7 @@ export function AddWorkspaceFlow(props: AddWorkspaceFlowProps) {
     const hostId = remoteHostId
     return {
       list: async (p) => {
-        const target = p ?? (await api.call('sftpHome', { hostId })).path
+        const target = p ?? (await remoteHome(api, hostId))
         const r = await api.call('sftpList', { hostId, path: target })
         return {
           path: r.path,

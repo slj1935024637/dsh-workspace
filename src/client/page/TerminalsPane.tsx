@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 终端标签页区域 —— 多终端切换、改名、后台保留、结束后重开、上次终端恢复
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/TerminalsPane.tsx
@@ -26,7 +26,8 @@ function NewTerminalButton(props: {
 }) {
   const { t } = props
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  // 正在打开的终端数：只用于按钮文字，不禁用按钮 —— 一台主机连接中（最长约 20 秒）不该挡住打开其他主机。
+  const [busy, setBusy] = useState(0)
 
   const items = useMemo<MenuEntry[]>(() => {
     if (props.hosts.length === 0) return [{ id: '', label: t('term.noHosts'), disabled: true }]
@@ -49,17 +50,17 @@ function NewTerminalButton(props: {
   const pick = async (hostId: string): Promise<void> => {
     setOpen(false)
     if (hostId === '') return
-    setBusy(true)
+    setBusy((n) => n + 1)
     try {
       await props.onOpen(hostId)
     } catch (error) {
       props.onError(messageOf(error))
     } finally {
-      setBusy(false)
+      setBusy((n) => n - 1)
     }
   }
 
-  const label = busy ? t('host.opening') : t('term.new')
+  const label = busy > 0 ? t('host.opening') : t('term.new')
   return (
     <Menu
       open={open}
@@ -67,18 +68,17 @@ function NewTerminalButton(props: {
       portal
       anchor={
         props.variant === 'primary' ? (
-          <Button size="sm" variant="primary" disabled={busy} onClick={() => setOpen(!open)}>
+          <Button size="sm" variant="primary" onClick={() => setOpen(!open)}>
             {label}
           </Button>
         ) : (
           <button
             type="button"
             className="dshws-tab dshws-tab-new"
-            disabled={busy}
             title={t('term.new')}
             onClick={() => setOpen(!open)}
           >
-            {busy ? label : '＋'}
+            {busy > 0 ? label : '＋'}
           </button>
         )
       }
