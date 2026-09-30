@@ -4,6 +4,8 @@
 
 ## 未发布
 
+## 0.10.1（2026-09-30）
+
 - 修复：宿主目录选择能力为 native（macOS 桌面版，只能弹系统对话框）时，「添加工作区」的本机一栏直接显示 `directory-picker/unavailable ... serves "native"` 报错。现在改由插件宿主端自己列本机目录（新增远程方法 `localList` / `localMkdir`，Node fs 实现，只列子目录），macOS 上也能应用内浏览、新建文件夹；「使用系统对话框…」按钮仍保留（取用顺序与官方 native picker 一致）
 - 修复：桌面版远程文件侧栏的 HTML / Markdown 预览白屏或报 `Browser access is disabled`。桌面版本机 Web 服务只放行 DSH 自身页面来源的请求，而预览 iframe 刻意不带 `allow-same-origin`（远程 HTML 不可信），它的请求拿不到放行令牌。桌面版改为 srcdoc 预览：页面里的相对样式表 / 脚本 / 图片 / CSS `url()` 与 `@import` 经新增的远程方法 `sftpReadData` 取回后内联（单个资源上限 8 MB），iframe 仍是不透明来源；网页版保持原来的预览路由。已知限制：脚本运行时 fetch / 动态加载的相对资源不可用
 - 修复：Monaco 编辑器样式丢失时（macOS 反馈：代码行乱飘、多出一个原生输入框）不会自己恢复——monaco.js 只执行一次，样式标签被移除后就再也不注入。现在构建产物把 CSS 全文存到 `window.__dshwsMonacoCss`，每次创建编辑器 / 对比视图前核对并补回（也兼容挂在 Shadow DOM 里的情况）
