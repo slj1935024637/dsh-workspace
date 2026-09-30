@@ -121,7 +121,14 @@ export const CSS = `
 
 /* 自适应分栏：宽时左列表（固定宽，可滚动）右内容；窄时只显示其一 */
 .dshws-split { display: flex; flex: 1 1 auto; height: 100%; min-height: 0; min-width: 0; }
-.dshws-split-list, .dshws-split-detail { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+/* 两列各自滚动：列不溢出，滚动只发生在列内的列表 / 编辑器里 */
+.dshws-split-list, .dshws-split-detail { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+/* 虚拟滚动的行：高度由 VirtualList 固定，内容不得撑高 */
+.dshws-vrow { overflow: hidden; box-sizing: border-box; }
+.dshws-vrow[data-sticky="true"] { position: sticky; top: -4px; z-index: 2; background: var(--dsw-alias-bg-layer-1); }
+.dshws-vrow > .dshws-tree-note { padding-top: 0; padding-bottom: 0; line-height: 32px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dshws-vrow > .dshws-rename { padding-top: 0; padding-bottom: 0; }
+.dshws-vrow > .dshws-git-section-head { position: static; }
 .dshws-split[data-wide="false"] > div { flex: 1 1 auto; }
 /* 宽屏：列表宽度由 Split 按拖动结果内联给出（flex-basis），这里是未量到宽度前的兜底 */
 .dshws-split[data-wide="true"] > .dshws-split-list { flex: 0 0 clamp(300px, 40%, 520px); min-width: 240px; }
@@ -415,6 +422,25 @@ export const CSS = `
 .dshws-set-control { flex-shrink: 0; display: flex; align-items: center; }
 .dshws-set-link { display: inline-flex; align-items: center; gap: 4px; color: var(--dsw-alias-state-business-primary); text-decoration: none; font-size: 13px; }
 .dshws-set-link:hover { text-decoration: underline; }
+.dshws-set-note[data-tone="ok"] { color: var(--dsw-alias-state-success-primary); }
+.dshws-set-actions { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.dshws-link-button { padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--dsw-alias-state-business-primary); cursor: pointer; }
+.dshws-link-button:hover { text-decoration: underline; }
+.dshws-update-notes, .dshws-update-error { margin: 0 0 12px; padding: 10px 12px; max-height: 240px; overflow: auto; border-radius: 8px; white-space: pre-wrap; word-break: break-word;
+  font-size: 12px; line-height: 1.6; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+.dshws-update-error { color: var(--dsw-alias-state-error-primary); }
+/* 升级完成、待重启的提示条（卡片顶部，醒目色） */
+.dshws-update-restart {
+  display: flex; align-items: center; gap: 12px; margin: 6px 0 8px; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 35%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 9%, transparent);
+}
+.dshws-update-restart-ico { flex-shrink: 0; color: var(--dsw-alias-state-business-primary); }
+.dshws-update-restart-text { flex: 1; min-width: 0; }
+.dshws-update-restart-title { font-size: 13.5px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dshws-update-restart-desc { margin-top: 3px; font-size: 12px; line-height: 1.55; color: var(--dsw-alias-label-secondary); }
+@media (max-width: 640px) { .dshws-update-restart { flex-wrap: wrap; } }
+.dshws-update-progress { display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; font-size: 12.5px; color: var(--dsw-alias-label-secondary); }
 .dshws-about { padding: 8px 0 12px; }
 .dshws-about-head { display: flex; align-items: baseline; gap: 8px; }
 .dshws-about-name { font-size: 16px; font-weight: 600; }
@@ -589,6 +615,27 @@ export const CSS = `
 .dshws-float[data-tone="error"] { background: var(--dsw-alias-state-error-primary); color: #fff; }
 .dshws-float[data-leaving="true"] { opacity: 0; transform: translateY(-4px); }
 @keyframes dshws-float-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* 侧栏里的小浮层：输入名称 / 确认删除（挂在 body 上，出现在右键处） */
+.dshws-ask {
+  position: fixed; z-index: 3050; width: 280px; max-width: calc(100vw - 16px); padding: 12px; box-sizing: border-box; outline: none;
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-elevation-prominent, 0 10px 30px rgba(0, 0, 0, .16)); animation: dshws-float-in .12s ease-out;
+  font-size: 13px; color: var(--dsw-alias-label-primary);
+}
+.dshws-ask-title { font-weight: 500; }
+.dshws-ask-message { line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.dshws-ask-input { width: 100%; box-sizing: border-box; }
+.dshws-ask-note { min-height: 0; font-size: 12px; color: var(--dsw-alias-state-error-primary); }
+.dshws-ask-note:empty { display: none; }
+.dshws-ask-row { display: flex; justify-content: flex-end; gap: 8px; }
+.dshws-ask-btn {
+  height: 28px; padding: 0 12px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+  border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary);
+}
+.dshws-ask-btn:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dshws-ask-btn[data-primary="true"] { border-color: transparent; background: var(--dsw-alias-state-business-primary); color: #fff; }
+.dshws-ask-btn[data-primary="true"][data-danger="true"] { background: var(--dsw-alias-state-error-primary); }
 
 /* 连接中 / 加载中的小转圈 */
 .dshws-spinner {

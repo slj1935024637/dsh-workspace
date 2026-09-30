@@ -1,5 +1,5 @@
-/*
- * @Description: 右侧栏「远程 Git」—— 改动（暂存 / 提交 / 丢弃 / diff）、查看其他分支（只读）、提交历史分叉图
+﻿/*
+ * @Description: 右侧栏「Git 仓库」（远程工作区经 SSH、本地工作区直接执行 git）—— 改动（暂存 / 提交 / 丢弃 / diff）、查看其他分支（只读）、提交历史分叉图
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/GitTab.tsx
  *
@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { Split } from './Split.js'
+import { NOTE_HEIGHT, ROW_HEIGHT, SECTION_HEIGHT, VirtualList } from './VirtualList.js'
 import { getDefaultRef, setDefaultRef } from './git-default.js'
 import { EmptyState, FileIcon, IconBack, IconBranch, IconButton, IconChevron, IconCloud, IconCommit, IconEye, IconFolder, IconMinus, IconPin, IconPlus, IconRefresh, IconSubmodule, IconTag, IconUndo, StatusBadge } from './ui.js'
 import type { GitBranch, GitChangedFile, GitCommit, GitFileStatus, GitStatus, GitTreeEntry } from '../../git/parse.js'
@@ -23,6 +24,8 @@ import { markdownDocument } from './markdown.js'
 import { RemoteFileViewer, type SidebarBodyProps } from './RemoteFileTab.js'
 import { copyText, relativeTo, showFloat, useContextMenu, type MenuItem } from './ContextMenu.js'
 import { RenameInput, useRemoteFileMenu } from './file-menu.js'
+import { displayPath } from './remote-index.js'
+import { useLocalSupport } from './host-support.js'
 
 /** 未查看其他分支时的页签：与查看分支时一致，都是 文件 / 改动 / 历史。 */
 type View = 'files' | 'changes' | 'history'
@@ -48,7 +51,8 @@ export function GitTab(props: SidebarBodyProps) {
   const { t, api, index, sessionId } = props
   const [, setVersion] = useState(0)
   useEffect(() => index.subscribe(() => setVersion((v) => v + 1)), [index])
-  const workspace = index.bySession(sessionId)
+  const workspace = index.workspaceFor(sessionId)
+  const support = useLocalSupport(api, workspace?.local === true)
   // 依赖用主机 + 目录这两个字符串，而不是 workspace 对象：对象换了但内容没变时，
   // 不应让 call / refresh 等回调变化 —— 它们一变就会触发重载并清掉右侧已打开的预览。
   const wsHost = workspace?.hostId
@@ -57,7 +61,7 @@ export function GitTab(props: SidebarBodyProps) {
   /** worktree：分支检出在另一个 git 工作目录时，在那个目录里执行（宿主校验属于同一仓库）。 */
   const call = useCallback(
     async <T,>(op: GitOp, worktree?: string): Promise<T> => {
-      if (wsHost === undefined || wsRoot === undefined) throw new Error(t('side.notRemote'))
+      if (wsHost === undefined || wsRoot === undefined) throw new Error(t('side.noWorkspace'))
       return (await api.call('git', {
         hostId: wsHost,
         root: wsRoot,
@@ -283,7 +287,8 @@ export function GitTab(props: SidebarBodyProps) {
     }
   }
 
-  if (workspace === undefined) return <div className="dshws-side-note">{t('side.notRemote')}</div>
+  if (workspace === undefined) return <div className="dshws-side-note">{t('side.noWorkspace')}</div>
+  if (support === 'outdated') return <div className="dshws-side-note" data-tone="error">{t('side.localNeedsRestart')}</div>
 
   /** 当前检出分支的文件树：远程目录里的真实文件（SFTP），隐藏 .git。路径统一为仓库内相对路径。 */
   // 当前分支 = 工作区根目录；检出在另一个 git 工作目录的分支 = 那个目录。
@@ -474,7 +479,7 @@ export function GitTab(props: SidebarBodyProps) {
         {repo === null ? (
           <>
             <IconBranch />
-            <span className="dshws-toolbar-title" title={workspace.remotePath}>
+            <span className="dshws-toolbar-title" title={displayPath(workspace.remotePath)}>
               {workspace.title}
             </span>
           </>
@@ -743,53 +748,72 @@ function ChangesView(props: ChangesProps) {
     )
   }
 
-  const section = (title: string, files: GitFileStatus[], kind: 'staged' | 'unstaged' | 'untracked') =>
-    files.length === 0 ? null : (
-      <div className="dshws-git-section">
-        <div className="dshws-git-section-head">
-          <span>{title} ({files.length})</span>
-          {kind === 'staged' ? (
-            <button type="button" className="dshws-link-btn" disabled={busy} onClick={() => void act({ op: 'unstage', paths: files.map((f) => f.path) })}>
-              {t('git.unstageAll')}
-            </button>
-          ) : (
-            <button type="button" className="dshws-link-btn" disabled={busy} onClick={() => void act({ op: 'stage', paths: files.map((f) => f.path) })}>
-              {t('git.stageAll')}
-            </button>
-          )}
-        </div>
-        {files.map((f) => row(f, kind))}
+  type Kind = 'staged' | 'unstaged' | 'untracked'
+  type Row = { kind: 'head'; section: Kind; title: string; files: GitFileStatus[] } | { kind: 'file'; section: Kind; file: GitFileStatus }
+  // 拍平成「分区标题 + 文件行」后虚拟滚动；分区标题吸顶。
+  const rows: Row[] = []
+  const pushSection = (title: string, files: GitFileStatus[], kind: Kind): void => {
+    if (files.length === 0) return
+    rows.push({ kind: 'head', section: kind, title, files })
+    for (const f of files) rows.push({ kind: 'file', section: kind, file: f })
+  }
+  pushSection(t('git.staged'), staged, 'staged')
+  pushSection(t('git.unstaged'), unstaged, 'unstaged')
+  pushSection(t('git.untracked'), untracked, 'untracked')
+
+  const renderRow = (r: Row) =>
+    r.kind === 'file' ? (
+      row(r.file, r.section)
+    ) : (
+      <div className="dshws-git-section-head">
+        <span>{r.title} ({r.files.length})</span>
+        {r.section === 'staged' ? (
+          <button type="button" className="dshws-link-btn" disabled={busy} onClick={() => void act({ op: 'unstage', paths: r.files.map((f) => f.path) })}>
+            {t('git.unstageAll')}
+          </button>
+        ) : (
+          <button type="button" className="dshws-link-btn" disabled={busy} onClick={() => void act({ op: 'stage', paths: r.files.map((f) => f.path) })}>
+            {t('git.stageAll')}
+          </button>
+        )}
       </div>
     )
 
   return (
-    <div className="dshws-side-tree">
-      <div className="dshws-git-commit">
-        <textarea
-          className="dshws-textarea"
-          rows={3}
-          value={message}
-          placeholder={staged.length > 0 ? t('git.messagePlaceholder') : t('git.nothingStaged')}
-          onChange={(e) => setMessage(e.target.value)}
-        />
-        <button
-          type="button"
-          className="dshws-git-commit-btn"
-          disabled={busy || staged.length === 0 || message.trim() === ''}
-          onClick={() => void act({ op: 'commit', message }).then((ok) => ok && setMessage(''))}
-        >
-          {t('git.commit')} ({staged.length})
-        </button>
-      </div>
-      {status.files.length === 0 ? <div className="dshws-side-note">{t('git.clean')}</div> : null}
-      {section(t('git.staged'), staged, 'staged')}
-      {section(t('git.unstaged'), unstaged, 'unstaged')}
-      {section(t('git.untracked'), untracked, 'untracked')}
+    <>
+      <VirtualList
+        items={rows}
+        itemKey={(r) => (r.kind === 'head' ? `head:${r.section}` : `${r.section}:${r.file.path}`)}
+        itemHeight={(r) => (r.kind === 'head' ? SECTION_HEIGHT : ROW_HEIGHT)}
+        isSticky={(r) => r.kind === 'head'}
+        renderItem={renderRow}
+        header={
+          <>
+            <div className="dshws-git-commit">
+              <textarea
+                className="dshws-textarea"
+                rows={3}
+                value={message}
+                placeholder={staged.length > 0 ? t('git.messagePlaceholder') : t('git.nothingStaged')}
+                onChange={(e) => setMessage(e.target.value)}
+              />
+              <button
+                type="button"
+                className="dshws-git-commit-btn"
+                disabled={busy || staged.length === 0 || message.trim() === ''}
+                onClick={() => void act({ op: 'commit', message }).then((ok) => ok && setMessage(''))}
+              >
+                {t('git.commit')} ({staged.length})
+              </button>
+            </div>
+            {status.files.length === 0 ? <div className="dshws-side-note">{t('git.clean')}</div> : null}
+          </>
+        }
+      />
       {menuNode}
-    </div>
+    </>
   )
 }
-
 // ------------------------------------------------------------------ 分支选择器（顶部下拉：只切换要查看的分支，不检出）
 
 interface BranchPickerProps {
@@ -945,9 +969,9 @@ function BranchPicker(props: BranchPickerProps) {
                 </button>
               </div>
               {props.otherWorktree !== undefined ? (
-                <div className="dshws-bp-note" data-tone="info" title={t('git.inWorktree', { path: props.otherWorktree })}>
+                <div className="dshws-bp-note" data-tone="info" title={t('git.inWorktree', { path: displayPath(props.otherWorktree) })}>
                   <IconFolder size={13} />
-                  <span className="dshws-bp-note-text dshws-mono">{t('git.inWorktreeLine', { path: props.otherWorktree })}</span>
+                  <span className="dshws-bp-note-text dshws-mono">{t('git.inWorktreeLine', { path: displayPath(props.otherWorktree) })}</span>
                 </div>
               ) : null}
               {props.binfo?.mode === 'readonly' ? (
@@ -1043,59 +1067,83 @@ function TreeView(props: { t: SidebarBodyProps['t']; load(dir: string): Promise<
     }
   })
 
-  const render = (dir: string, depth: number) => {
+  // 拍平成行后虚拟滚动（见 VirtualList.tsx）。
+  type Row = { kind: 'entry'; entry: GitTreeEntry; depth: number } | { kind: 'note'; key: string; text: string; depth: number; tone?: 'error' }
+  const rows: Row[] = []
+  const walk = (dir: string, depth: number): void => {
     const state = dirs[dir]
-    if (state === undefined) return <div className="dshws-tree-note" style={{ paddingLeft: 12 + depth * 14 }}>{t('files.loading')}</div>
-    if (state.error !== undefined) return <div className="dshws-tree-note" data-tone="error">{state.error}</div>
-    return (state.entries ?? []).map((e) => {
-      const isDir = e.type === 'tree'
+    if (state === undefined) {
+      rows.push({ kind: 'note', key: `${dir}#loading`, text: t('files.loading'), depth })
+      return
+    }
+    if (state.error !== undefined) {
+      rows.push({ kind: 'note', key: `${dir}#error`, text: state.error, depth, tone: 'error' })
+      return
+    }
+    for (const e of state.entries ?? []) {
+      rows.push({ kind: 'entry', entry: e, depth })
+      if (e.type === 'tree' && expanded.has(e.path)) walk(e.path, depth + 1)
+    }
+  }
+  walk('', 0)
+
+  const renderRow = (r: Row) => {
+    if (r.kind === 'note') {
       return (
-        <div key={e.path}>
-          {m !== undefined && menu.renaming === toAbs(e.path) ? (
-            <RenameInput initial={e.name} paddingLeft={8 + depth * 14} onSubmit={(name) => void menu.submitRename(toAbs(e.path), name)} onCancel={menu.cancelRename} />
-          ) : (
-          <button
-            type="button"
-            className="dshws-row"
-            style={{ paddingLeft: 8 + depth * 14 }}
-            title={e.path}
-            data-selected={props.selected === e.path}
-            disabled={e.type === 'commit'}
-            onContextMenu={m !== undefined ? (ev) => menu.openFor(ev, toAbs(e.path), isDir) : undefined}
-            onClick={() => {
-              if (!isDir) {
-                props.onOpen(e.path)
-                return
-              }
-              const next = new Set(expanded)
-              if (next.has(e.path)) next.delete(e.path)
-              else {
-                next.add(e.path)
-                if (dirs[e.path] === undefined) void load(e.path)
-              }
-              setExpanded(next)
-            }}
-          >
-            <span className="dshws-row-caret">{isDir ? <IconChevron size={12} open={expanded.has(e.path)} /> : null}</span>
-            {isDir ? <IconFolder open={expanded.has(e.path)} /> : e.type === 'commit' ? <IconSubmodule /> : <FileIcon name={e.name} />}
-            <span className="dshws-row-name">{e.name}</span>
-          </button>
-          )}
-          {isDir && expanded.has(e.path) ? render(e.path, depth + 1) : null}
+        <div className="dshws-tree-note" data-tone={r.tone} title={r.text} style={{ paddingLeft: 12 + r.depth * 14 }}>
+          {r.text}
         </div>
       )
-    })
+    }
+    const e = r.entry
+    const depth = r.depth
+    const isDir = e.type === 'tree'
+    if (m !== undefined && menu.renaming === toAbs(e.path)) {
+      return <RenameInput initial={e.name} paddingLeft={8 + depth * 14} onSubmit={(name) => void menu.submitRename(toAbs(e.path), name)} onCancel={menu.cancelRename} />
+    }
+    return (
+      <button
+        type="button"
+        className="dshws-row"
+        style={{ paddingLeft: 8 + depth * 14 }}
+        title={e.path}
+        data-selected={props.selected === e.path}
+        disabled={e.type === 'commit'}
+        onContextMenu={m !== undefined ? (ev) => menu.openFor(ev, toAbs(e.path), isDir) : undefined}
+        onClick={() => {
+          if (!isDir) {
+            props.onOpen(e.path)
+            return
+          }
+          const next = new Set(expanded)
+          if (next.has(e.path)) next.delete(e.path)
+          else {
+            next.add(e.path)
+            if (dirs[e.path] === undefined) void load(e.path)
+          }
+          setExpanded(next)
+        }}
+      >
+        <span className="dshws-row-caret">{isDir ? <IconChevron size={12} open={expanded.has(e.path)} /> : null}</span>
+        {isDir ? <IconFolder open={expanded.has(e.path)} /> : e.type === 'commit' ? <IconSubmodule /> : <FileIcon name={e.name} />}
+        <span className="dshws-row-name">{e.name}</span>
+      </button>
+    )
   }
+
   return (
     <>
-      <div className="dshws-side-tree" onContextMenu={m !== undefined ? menu.openForRoot : undefined}>
-        {render('', 0)}
-      </div>
+      <VirtualList
+        items={rows}
+        itemKey={(r) => (r.kind === 'entry' ? r.entry.path : r.key)}
+        itemHeight={(r) => (r.kind === 'entry' ? ROW_HEIGHT : NOTE_HEIGHT)}
+        renderItem={renderRow}
+        onContextMenu={m !== undefined ? menu.openForRoot : undefined}
+      />
       {menu.node}
     </>
   )
 }
-
 // ------------------------------------------------------------------ 查看模式：非检出分支的改动（临时索引）
 
 function BranchChangesView(props: {
@@ -1138,82 +1186,97 @@ function BranchChangesView(props: {
     }
   }
 
-  return (
-    <div className="dshws-side-tree">
-      <div className="dshws-tree-note">{t('git.branchChangesHint', { name: shortRef(refName) })}</div>
-      <div className="dshws-git-commit">
-        <textarea
-          className="dshws-textarea"
-          rows={3}
-          value={message}
-          placeholder={files !== null && files.length > 0 ? t('git.messagePlaceholder') : t('git.branchNothing')}
-          onChange={(e) => setMessage(e.target.value)}
-        />
+  type Row = { kind: 'head' } | { kind: 'file'; file: GitChangedFile }
+  const rows: Row[] = files !== null && files.length > 0 ? [{ kind: 'head' }, ...files.map((f): Row => ({ kind: 'file', file: f }))] : []
+
+  const renderRow = (r: Row) => {
+    if (r.kind === 'head') {
+      return (
+        <div className="dshws-git-section-head">
+          <span>{t('git.unstaged')} ({files?.length ?? 0})</span>
+          {confirming === '*' ? (
+            <span className="dshws-git-confirm">
+              {t('git.confirmDiscard')}
+              <button type="button" className="dshws-link-btn" data-tone="danger" onClick={() => void run({ op: 'branchDiscard', ref: refName })}>{t('common.confirm')}</button>
+              <button type="button" className="dshws-link-btn" onClick={() => setConfirming(null)}>{t('form.cancel')}</button>
+            </span>
+          ) : (
+            <button type="button" className="dshws-link-btn" disabled={busy} onClick={() => setConfirming('*')}>
+              {t('git.discardAll')}
+            </button>
+          )}
+        </div>
+      )
+    }
+    const f = r.file
+    return (
+      <div className="dshws-git-row">
         <button
           type="button"
-          className="dshws-git-commit-btn"
-          disabled={busy || files === null || files.length === 0 || message.trim() === ''}
-          onClick={() => void run({ op: 'branchCommit', ref: refName, message }).then((ok) => ok && setMessage(''))}
+          className="dshws-git-file"
+          title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}
+          onClick={() =>
+            void props.openDiff(
+              { kind: 'branch', ref: refName, path: f.path, ...(f.origPath !== undefined ? { origPath: f.origPath } : {}) },
+              `${shortRef(refName)} · ${f.path}`
+            )
+          }
         >
-          {t('git.commitTo', { name: shortRef(refName) })} ({files?.length ?? 0})
+          <StatusBadge s={f.status} />
+          <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
+          <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
         </button>
+        {confirming === f.path ? (
+          <span className="dshws-git-confirm">
+            {t('git.confirmDiscard')}
+            <button type="button" className="dshws-link-btn" data-tone="danger" onClick={() => void run({ op: 'branchRevert', ref: refName, paths: f.origPath !== undefined ? [f.path, f.origPath] : [f.path] })}>
+              {t('common.confirm')}
+            </button>
+            <button type="button" className="dshws-link-btn" onClick={() => setConfirming(null)}>{t('form.cancel')}</button>
+          </span>
+        ) : (
+          <span className="dshws-git-actions">
+            <IconButton title={t('git.discard')} tone="danger" disabled={busy} onClick={() => setConfirming(f.path)}><IconUndo /></IconButton>
+          </span>
+        )}
       </div>
-      {error !== null ? <div className="dshws-tree-note" data-tone="error">{error}</div> : null}
-      {files === null && error === null ? <div className="dshws-tree-note">{t('files.loading')}</div> : null}
-      {files !== null && files.length > 0 ? (
-        <div className="dshws-git-section">
-          <div className="dshws-git-section-head">
-            <span>{t('git.unstaged')} ({files.length})</span>
-            {confirming === '*' ? (
-              <span className="dshws-git-confirm">
-                {t('git.confirmDiscard')}
-                <button type="button" className="dshws-link-btn" data-tone="danger" onClick={() => void run({ op: 'branchDiscard', ref: refName })}>{t('common.confirm')}</button>
-                <button type="button" className="dshws-link-btn" onClick={() => setConfirming(null)}>{t('form.cancel')}</button>
-              </span>
-            ) : (
-              <button type="button" className="dshws-link-btn" disabled={busy} onClick={() => setConfirming('*')}>
-                {t('git.discardAll')}
-              </button>
-            )}
+    )
+  }
+
+  return (
+    <VirtualList
+      items={rows}
+      itemKey={(r) => (r.kind === 'head' ? 'head' : r.file.path)}
+      itemHeight={(r) => (r.kind === 'head' ? SECTION_HEIGHT : ROW_HEIGHT)}
+      isSticky={(r) => r.kind === 'head'}
+      renderItem={renderRow}
+      header={
+        <>
+          <div className="dshws-tree-note">{t('git.branchChangesHint', { name: shortRef(refName) })}</div>
+          <div className="dshws-git-commit">
+            <textarea
+              className="dshws-textarea"
+              rows={3}
+              value={message}
+              placeholder={files !== null && files.length > 0 ? t('git.messagePlaceholder') : t('git.branchNothing')}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+            <button
+              type="button"
+              className="dshws-git-commit-btn"
+              disabled={busy || files === null || files.length === 0 || message.trim() === ''}
+              onClick={() => void run({ op: 'branchCommit', ref: refName, message }).then((ok) => ok && setMessage(''))}
+            >
+              {t('git.commitTo', { name: shortRef(refName) })} ({files?.length ?? 0})
+            </button>
           </div>
-          {files.map((f) => (
-            <div key={f.path} className="dshws-git-row">
-              <button
-                type="button"
-                className="dshws-git-file"
-                title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}
-                onClick={() =>
-                  void props.openDiff(
-                    { kind: 'branch', ref: refName, path: f.path, ...(f.origPath !== undefined ? { origPath: f.origPath } : {}) },
-                    `${shortRef(refName)} · ${f.path}`
-                  )
-                }
-              >
-                <StatusBadge s={f.status} />
-                <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
-                <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
-              </button>
-              {confirming === f.path ? (
-                <span className="dshws-git-confirm">
-                  {t('git.confirmDiscard')}
-                  <button type="button" className="dshws-link-btn" data-tone="danger" onClick={() => void run({ op: 'branchRevert', ref: refName, paths: f.origPath !== undefined ? [f.path, f.origPath] : [f.path] })}>
-                    {t('common.confirm')}
-                  </button>
-                  <button type="button" className="dshws-link-btn" onClick={() => setConfirming(null)}>{t('form.cancel')}</button>
-                </span>
-              ) : (
-                <span className="dshws-git-actions">
-                  <IconButton title={t('git.discard')} tone="danger" disabled={busy} onClick={() => setConfirming(f.path)}><IconUndo /></IconButton>
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
+          {error !== null ? <div className="dshws-tree-note" data-tone="error">{error}</div> : null}
+          {files === null && error === null ? <div className="dshws-tree-note">{t('files.loading')}</div> : null}
+        </>
+      }
+    />
   )
 }
-
 // ------------------------------------------------------------------ 查看模式：远程分支 / 标签 → 新建本地分支后才能改
 
 function CreateLocalBranch(props: { t: SidebarBodyProps['t']; call<T>(op: GitOp): Promise<T>; from: GitBranch; onCreated(ref: string, name: string): void }) {
@@ -1257,11 +1320,13 @@ function CompareView(props: ViewProps & { openDiff(target: DiffTarget, title: st
   if (error !== null) return <div className="dshws-tree-note" data-tone="error">{error}</div>
   if (result === null) return <div className="dshws-tree-note">{t('files.loading')}</div>
   return (
-    <div className="dshws-side-tree">
-      <div className="dshws-tree-note">{t('git.compareHint', { count: result.files.length })}</div>
-      {result.files.map((f) => (
+    <VirtualList
+      items={result.files}
+      itemKey={(f) => f.path}
+      itemHeight={() => ROW_HEIGHT}
+      header={<div className="dshws-tree-note">{t('git.compareHint', { count: result.files.length })}</div>}
+      renderItem={(f) => (
         <button
-          key={f.path}
           type="button"
           className="dshws-git-file"
           title={f.origPath !== undefined ? `${f.origPath} → ${f.path}` : f.path}
@@ -1277,8 +1342,8 @@ function CompareView(props: ViewProps & { openDiff(target: DiffTarget, title: st
           <FileIcon name={f.path.slice(f.path.lastIndexOf('/') + 1)} />
           <span className="dshws-side-name" data-deleted={f.status === 'D'}>{f.path}</span>
         </button>
-      ))}
-    </div>
+      )}
+    />
   )
 }
 

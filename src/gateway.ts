@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: Typert 远程网关 —— 浏览器调用宿主的唯一入口
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/gateway.ts
@@ -23,6 +23,16 @@ import { DEFAULT_IGNORE } from './sftp/ignore.js'
 import { insideRoot, previewUrl } from './preview-route.js'
 import { GitError, RemoteGit } from './git/remote-git.js'
 import { LocalBrowseError, listLocalDirectory, makeLocalDirectory } from './local/browse.js'
+import { fromLocalPosix, isLocalId, toLocalPosix } from './local/local-fs.js'
+import { LocalGit } from './local/local-git.js'
+import type { GitRepo } from './git/remote-git.js'
+import type { RemoteFs } from './sftp/remote-fs.js'
+
+/** 远程（RemoteFs）与本地（LocalFs）共同的文件操作面。 */
+type FileOps = Pick<
+  RemoteFs,
+  'home' | 'list' | 'readText' | 'readData' | 'writeText' | 'mkdir' | 'createFile' | 'rename' | 'remove' | 'copy' | 'search' | 'openDownload' | 'upload' | 'statPath'
+>
 
 /**
  * 本机浏览错误 → 远程错误。消息沿用宿主 DirectoryBrowseError 的格式（`directory-picker/<kind>: ...`），
@@ -82,6 +92,11 @@ export function toRemote(error: unknown): RemoteError {
     return new RemoteError(ERROR_CODES.exists, error.message, { path: error.remotePath })
   }
   const sftpCode = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined
+  // 本地文件（node:fs）的错误码。
+  if (sftpCode === 'ENOENT') return new RemoteError(ERROR_CODES.notFound, '路径不存在（可能已被删除或移动）。', {})
+  if (sftpCode === 'EACCES' || sftpCode === 'EPERM') return new RemoteError(ERROR_CODES.failed, '权限不足：当前用户无权执行此操作（或文件正被其他程序占用）。', {})
+  if (sftpCode === 'EEXIST') return new RemoteError(ERROR_CODES.exists, '目标已存在。', { path: String((error as { path?: unknown }).path ?? '') })
+  if (sftpCode === 'ENOTEMPTY') return new RemoteError(ERROR_CODES.failed, '目录不为空。', {})
   if (sftpCode === SFTP_NO_SUCH_FILE) {
     // ssh2 的原始消息只有 "No such file"，补上可读说明。
     return new RemoteError(ERROR_CODES.notFound, '远端路径不存在（可能已被删除或移动）。', {})
@@ -506,16 +521,16 @@ export class WorkspaceGateway extends RemoteService {
   // ---------------------------------------------------------------- 文件（SFTP）
 
   sftpHome(input: In<'sftpHome'>): Out<'sftpHome'> {
-    return this.guard(async () => ({ path: await this.rt.files.home(this.requireHost(input.hostId)) }))
+    return this.guard(async () => ({ path: await this.fs(input.hostId).home(input.hostId) }))
   }
 
   sftpList(input: In<'sftpList'>): Out<'sftpList'> {
-    return this.guard(() => this.rt.files.list(this.requireHost(input.hostId), input.path))
+    return this.guard(() => this.fs(input.hostId).list(input.hostId, input.path))
   }
 
   sftpRead(input: In<'sftpRead'>): Out<'sftpRead'> {
     return this.guard(() =>
-      this.rt.files.readText(this.requireHost(input.hostId), input.path, this.rt.config.maxReadBytes)
+      this.fs(input.hostId).readText(input.hostId, input.path, this.rt.config.maxReadBytes)
     )
   }
 
@@ -554,46 +569,46 @@ export class WorkspaceGateway extends RemoteService {
 
   /** 单个内联资源的上限：远程调用是整包 JSON（base64 再膨胀 1/3），太大的图片 / 字体直接放弃内联。 */
   sftpReadData(input: In<'sftpReadData'>): Out<'sftpReadData'> {
-    return this.guard(() => this.rt.files.readData(this.requireHost(input.hostId), input.path, 8 * 1024 * 1024))
+    return this.guard(() => this.fs(input.hostId).readData(input.hostId, input.path, 8 * 1024 * 1024))
   }
 
   sftpWrite(input: In<'sftpWrite'>): Out<'sftpWrite'> {
     return this.guard(() =>
-      this.rt.files.writeText(this.requireHost(input.hostId), input.path, input.content, input.expectedMtime)
+      this.fs(input.hostId).writeText(input.hostId, input.path, input.content, input.expectedMtime)
     )
   }
 
   sftpMkdir(input: In<'sftpMkdir'>): Out<'sftpMkdir'> {
     return this.guard(async () => ({
-      path: await this.rt.files.mkdir(this.requireHost(input.hostId), input.parent, input.name)
+      path: await this.fs(input.hostId).mkdir(input.hostId, input.parent, input.name)
     }))
   }
 
   sftpCreateFile(input: In<'sftpCreateFile'>): Out<'sftpCreateFile'> {
     return this.guard(async () => ({
-      path: await this.rt.files.createFile(this.requireHost(input.hostId), input.parent, input.name)
+      path: await this.fs(input.hostId).createFile(input.hostId, input.parent, input.name)
     }))
   }
 
   sftpRename(input: In<'sftpRename'>): Out<'sftpRename'> {
     return this.guard(async () => ({
-      path: await this.rt.files.rename(this.requireHost(input.hostId), input.path, input.name)
+      path: await this.fs(input.hostId).rename(input.hostId, input.path, input.name)
     }))
   }
 
   /** 删除（目录递归）。安全边界在 RemoteFs.remove 里强制，浏览器端的确认只是第一道。 */
   sftpRemove(input: In<'sftpRemove'>): Out<'sftpRemove'> {
-    return this.guard(() => this.rt.files.remove(this.requireHost(input.hostId), input.path))
+    return this.guard(() => this.fs(input.hostId).remove(input.hostId, input.path))
   }
 
   sftpCopy(input: In<'sftpCopy'>): Out<'sftpCopy'> {
     return this.guard(async () => ({
-      path: await this.rt.files.copy(this.requireHost(input.hostId), input.source, input.targetDir)
+      path: await this.fs(input.hostId).copy(input.hostId, input.source, input.targetDir)
     }))
   }
 
   sftpSearch(input: In<'sftpSearch'>): Out<'sftpSearch'> {
-    return this.guard(() => this.rt.files.search(this.requireHost(input.hostId), input.root, input.query))
+    return this.guard(() => this.fs(input.hostId).search(input.hostId, input.root, input.query))
   }
 
   getPrefs(_: In<'getPrefs'>): Out<'getPrefs'> {
@@ -616,16 +631,32 @@ export class WorkspaceGateway extends RemoteService {
     })
   }
 
+  setFilesTakeover(input: In<'setFilesTakeover'>): Out<'setFilesTakeover'> {
+    return this.guard(() => {
+      const prefs = this.rt.prefs.setFilesTakeover(input.enabled)
+      this.rt.log.info('', 'config', `已${input.enabled ? '开启' : '关闭'}「接管 DSH 文件侧栏」。`)
+      return this.prefsOutput(prefs)
+    })
+  }
+
   private prefsOutput(prefs = this.rt.prefs.get()): MethodIO['getPrefs'][1] {
-    return { ignore: prefs.ignore, defaultIgnore: [...DEFAULT_IGNORE], takeoverAddWorkspace: prefs.takeoverAddWorkspace }
+    return {
+      ignore: prefs.ignore,
+      defaultIgnore: [...DEFAULT_IGNORE],
+      takeoverAddWorkspace: prefs.takeoverAddWorkspace,
+      takeoverFilesSidebar: prefs.takeoverFilesSidebar
+    }
   }
 
   /**
-   * 远程 Git。只允许在「该主机已登记的远程工作区根目录」里执行，浏览器不能拿任意目录让宿主跑 git。
+   * Git 仓库面板。只允许在工作区根目录里执行，浏览器不能拿任意目录让宿主跑 git：
+   * - 远程：根目录必须是该主机已登记的远程工作区
+   * - 本地（hostId = local:<sessionId>）：根目录由宿主按会话 cwd 推导，忽略浏览器传的 root
    * 改动类操作（暂存 / 丢弃 / 提交 / 切换分支）写连接日志，事后可查。
    */
   git(input: In<'git'>): Out<'git'> {
     return this.guard(async () => {
+      if (isLocalId(input.hostId)) return await this.localGit(input)
       const hostId = this.requireHost(input.hostId)
       const root = normalizeRemotePath(input.root)
       if (!this.rt.bindings.list().some((b) => b.hostId === hostId && b.remotePath === root)) {
@@ -633,83 +664,110 @@ export class WorkspaceGateway extends RemoteService {
       }
       const rootGit = new RemoteGit(this.rt, hostId, root)
       // 在「另一个 git 工作目录」里执行（分支检出在那里）：只允许本仓库自己的工作目录，由 git 列出为准。
-      let git = rootGit
+      let git: GitRepo = rootGit
       let where = root
       if (input.worktree !== undefined && normalizeRemotePath(input.worktree) !== root) {
         where = normalizeRemotePath(input.worktree)
         if (!(await rootGit.isOwnWorktree(where))) throw new Error(`不是该仓库的工作目录：${where}`)
         git = new RemoteGit(this.rt, hostId, where)
       }
-      const note = (what: string): void => this.rt.log.info(hostId, 'git', `${where}：${what}`)
-      try {
-        switch (input.op) {
-          case 'status':
-            return await git.status()
-          case 'log':
-            return { commits: await git.log(input.skip, input.limit, input.ref) }
-          case 'tree':
-            return await git.tree(input.ref, input.dir)
-          case 'file':
-            return await git.file(input.ref, input.path)
-          case 'compare':
-            return await git.compare(input.base, input.target)
-          case 'branches':
-            return { branches: await git.branches() }
-          case 'show':
-            return { files: await git.show(input.hash, input.parent) }
-          case 'diff':
-            return await git.diff(input.target)
-          case 'stage':
-            await git.stage(input.paths)
-            note(`暂存 ${input.paths.length} 个文件`)
-            return { ok: true }
-          case 'unstage':
-            await git.unstage(input.paths)
-            note(`取消暂存 ${input.paths.length} 个文件`)
-            return { ok: true }
-          case 'discard':
-            await git.discard(input.tracked, input.untracked)
-            this.rt.log.warn(hostId, 'git', `${root}：丢弃改动 ${input.tracked.length + input.untracked.length} 个文件（${[...input.tracked, ...input.untracked].slice(0, 5).join(', ')}）`)
-            return { ok: true }
-          case 'commit': {
-            const hash = await git.commit(input.message)
-            note(`提交 ${hash}：${input.message.split('\n')[0]}`)
-            return { hash }
-          }
-          // ---- 编辑非检出分支（临时索引，不碰工作目录）
-          case 'branchInfo':
-            return await git.branchInfo(input.ref)
-          case 'branchChanges':
-            return await git.branchChanges(input.ref)
-          case 'branchSave':
-            await git.branchSave(input.ref, input.path, input.content)
-            return { ok: true }
-          case 'branchRevert':
-            await git.branchRevert(input.ref, input.paths)
-            note(`${input.ref}：撤销 ${input.paths.length} 个文件的未提交改动`)
-            return { ok: true }
-          case 'branchDiscard':
-            await git.branchDiscard(input.ref)
-            this.rt.log.warn(hostId, 'git', `${root}：丢弃分支 ${input.ref} 的全部未提交改动`)
-            return { ok: true }
-          case 'branchCommit': {
-            const hash = await git.branchCommit(input.ref, input.message)
-            note(`在分支 ${input.ref} 上提交 ${hash}（未检出）：${input.message.split('\n')[0]}`)
-            return { hash }
-          }
-          case 'createBranch': {
-            const ref = await git.createBranch(input.name, input.from)
-            note(`基于 ${input.from} 新建本地分支 ${ref}（未检出）`)
-            return { ref }
-          }
-        }
-      } catch (error) {
-        if (error instanceof GitError) throw new RemoteError(ERROR_CODES.failed, error.message, {})
-        throw error
-      }
+      return await this.gitOp(git, input, hostId, where)
     })
   }
 
+  /** 本地工作区的 git：路径在线上是本地 POSIX 形式（/C:/x），这里与原生路径互转。 */
+  private async localGit(input: In<'git'>): Promise<unknown> {
+    const scope = await this.rt.localScope(input.hostId)
+    const rootGit = new LocalGit(scope.root)
+    let git: GitRepo = rootGit
+    let where = scope.root
+    if (input.worktree !== undefined) {
+      const wt = fromLocalPosix(input.worktree)
+      const same = process.platform === 'win32' ? wt.toLowerCase() === scope.root.toLowerCase() : wt === scope.root
+      if (!same) {
+        if (!(await rootGit.isOwnWorktree(wt))) throw new Error(`不是该仓库的工作目录：${input.worktree}`)
+        git = new LocalGit(wt)
+        where = wt
+      }
+    }
+    const result = await this.gitOp(git, input, '', where)
+    // 分支检出所在目录：换回线上的本地 POSIX 形式，前端据此列目录 / 打开文件。
+    if (input.op === 'branchInfo') {
+      const info = result as { worktreePath?: string }
+      if (info.worktreePath !== undefined) return { ...info, worktreePath: toLocalPosix(info.worktreePath) }
+    }
+    return result
+  }
+
+  private async gitOp(git: GitRepo, input: In<'git'>, hostId: string, where: string): Promise<unknown> {
+    const note = (what: string): void => this.rt.log.info(hostId, 'git', `${where}：${what}`)
+    try {
+      switch (input.op) {
+        case 'status':
+          return await git.status()
+        case 'log':
+          return { commits: await git.log(input.skip, input.limit, input.ref) }
+        case 'tree':
+          return await git.tree(input.ref, input.dir)
+        case 'file':
+          return await git.file(input.ref, input.path)
+        case 'compare':
+          return await git.compare(input.base, input.target)
+        case 'branches':
+          return { branches: await git.branches() }
+        case 'show':
+          return { files: await git.show(input.hash, input.parent) }
+        case 'diff':
+          return await git.diff(input.target)
+        case 'stage':
+          await git.stage(input.paths)
+          note(`暂存 ${input.paths.length} 个文件`)
+          return { ok: true }
+        case 'unstage':
+          await git.unstage(input.paths)
+          note(`取消暂存 ${input.paths.length} 个文件`)
+          return { ok: true }
+        case 'discard':
+          await git.discard(input.tracked, input.untracked)
+          this.rt.log.warn(hostId, 'git', `${where}：丢弃改动 ${input.tracked.length + input.untracked.length} 个文件（${[...input.tracked, ...input.untracked].slice(0, 5).join(', ')}）`)
+          return { ok: true }
+        case 'commit': {
+          const hash = await git.commit(input.message)
+          note(`提交 ${hash}：${input.message.split('\n')[0]}`)
+          return { hash }
+        }
+        // ---- 编辑非检出分支（临时索引，不碰工作目录）
+        case 'branchInfo':
+          return await git.branchInfo(input.ref)
+        case 'branchChanges':
+          return await git.branchChanges(input.ref)
+        case 'branchSave':
+          await git.branchSave(input.ref, input.path, input.content)
+          return { ok: true }
+        case 'branchRevert':
+          await git.branchRevert(input.ref, input.paths)
+          note(`${input.ref}：撤销 ${input.paths.length} 个文件的未提交改动`)
+          return { ok: true }
+        case 'branchDiscard':
+          await git.branchDiscard(input.ref)
+          this.rt.log.warn(hostId, 'git', `${where}：丢弃分支 ${input.ref} 的全部未提交改动`)
+          return { ok: true }
+        case 'branchCommit': {
+          const hash = await git.branchCommit(input.ref, input.message)
+          note(`在分支 ${input.ref} 上提交 ${hash}（未检出）：${input.message.split('\n')[0]}`)
+          return { hash }
+        }
+        case 'createBranch': {
+          const ref = await git.createBranch(input.name, input.from)
+          note(`基于 ${input.from} 新建本地分支 ${ref}（未检出）`)
+          return { ref }
+        }
+      }
+    } catch (error) {
+      if (error instanceof GitError) throw new RemoteError(ERROR_CODES.failed, error.message, {})
+      throw error
+    }
+  }
   // ---------------------------------------------------------------- 本机目录（添加工作区兜底）
 
   /** 宿主目录选择器只有 native 能力时（macOS 桌面版），「添加工作区」的应用内浏览走这里。 */
@@ -739,8 +797,17 @@ export class WorkspaceGateway extends RemoteService {
    */
   previewUrl(input: In<'previewUrl'>): Out<'previewUrl'> {
     return this.guard(async () => {
-      const hostId = this.requireHost(input.hostId)
       const target = normalizeRemotePath(input.path)
+      if (isLocalId(input.hostId)) {
+        // 本地：令牌绑定会话工作区根目录（或同仓库的其他 git 工作目录），路径用线上的本地 POSIX 形式。
+        const native = await this.rt.localFiles.resolve(input.hostId, target)
+        const scope = await this.rt.localScope(input.hostId)
+        const roots = [scope.root, ...(await scope.extraRoots())]
+        const root = roots.find((r) => insideRoot(toLocalPosix(r), toLocalPosix(native)))
+        if (root === undefined) throw new Error(`该文件不在当前工作区内：${target}`)
+        return { url: previewUrl(this.rt.previews.grant(input.hostId, toLocalPosix(root)), target) }
+      }
+      const hostId = this.requireHost(input.hostId)
       const bound = this.rt.bindings.list().filter((b) => b.hostId === hostId)
       let root = bound
         .filter((b) => insideRoot(b.remotePath, target))
@@ -784,6 +851,16 @@ export class WorkspaceGateway extends RemoteService {
     })
   }
 
+  /**
+   * 文件操作的实现：local:<sessionId> 走本地工作区（根目录由宿主按会话推导），其余为保险箱里的远程主机。
+   * 两者接口一致，侧栏前端无需区分。
+   */
+  private fs(hostId: string): FileOps {
+    if (isLocalId(hostId)) return this.rt.localFiles
+    this.requireHost(hostId)
+    return this.rt.files
+  }
+
   /** 主机必须存在于保险箱里：浏览器不能拿任意 id 让宿主去连。 */
   private requireHost(hostId: string): string {
     if (this.rt.vault.getHost(hostId) === undefined) throw new Error(`主机不存在：${hostId}`)
@@ -791,6 +868,21 @@ export class WorkspaceGateway extends RemoteService {
       throw new RemoteError(ERROR_CODES.ssh2Unavailable, 'ssh2 不可用，请查看连接日志中的修复指引。', {})
     }
     return hostId
+  }
+
+  // ---------------------------------------------------------------- 自更新
+
+  updateStatus(_: In<'updateStatus'>): Out<'updateStatus'> {
+    return this.guard(() => this.rt.updater.status())
+  }
+
+  updateCheck(input: In<'updateCheck'>): Out<'updateCheck'> {
+    return this.guard(() => this.rt.updater.check(input.force === true))
+  }
+
+  /** 安装在后台进行（pnpm 可能要一两分钟），立即返回；界面轮询 updateStatus 看进度。 */
+  updateInstall(input: In<'updateInstall'>): Out<'updateInstall'> {
+    return this.guard(() => (input.source === 'latest' ? this.rt.updater.startLatest() : this.rt.updater.startUpload(input.token)))
   }
 
   // ---------------------------------------------------------------- 备份

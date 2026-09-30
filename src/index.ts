@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: dsh-workspace 宿主入口
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/index.ts
@@ -13,7 +13,12 @@ import { ensurePluginRoot } from './vault/store.js'
 import { WorkspaceGateway } from './gateway.js'
 import { HOST_MANIFEST } from './wire/manifest.js'
 import { TERMINAL_WS_PATH } from './wire/contract.js'
-import { createRuntime, type WorkspaceRuntime } from './runtime.js'
+import { createRuntime, type SessionPersistenceLike, type SessionsLike, type WorkspaceRuntime } from './runtime.js'
+import type { PluginManagerLike } from './update/updater.js'
+import { UPDATE_HTTP_PREFIX, createUpdateHttpHandler } from './update/http.js'
+import path from 'node:path'
+import { pluginRoot } from './paths.js'
+import { isLocalId } from './local/local-fs.js'
 import { isTrustedRequest } from './terminal/trust-fence.js'
 import { attachSocket, terminalIdFromUrl, type SocketLike } from './terminal/socket.js'
 import { SFTP_HTTP_PREFIX, createSftpHttpHandler } from './sftp/http.js'
@@ -138,6 +143,33 @@ export function apply(ctx: Context, config: PluginConfig): void {
   }).inject.bind(ctx)
   inject(['webServer', 'webRuntime'], (sub) => mountTerminalSocket(sub, runtime))
 
+  // 宿主可选服务：插件管理器（自更新）与会话（本地文件管理按会话取工作区根目录）。
+  // 放进 inject 子作用域：服务不存在时对应功能提示不可用，不影响其余部分。
+  inject(['pluginManager'], (sub) => {
+    sub.effect(() => {
+      runtime.host.pluginManager = (sub as unknown as { pluginManager: PluginManagerLike }).pluginManager
+      return () => {
+        runtime.host.pluginManager = undefined
+      }
+    }, 'dsh-workspace: plugin manager')
+  })
+  inject(['sessions'], (sub) => {
+    sub.effect(() => {
+      runtime.host.sessions = (sub as unknown as { sessions: SessionsLike }).sessions
+      return () => {
+        runtime.host.sessions = undefined
+      }
+    }, 'dsh-workspace: sessions')
+  })
+  inject(['sessionPersistence'], (sub) => {
+    sub.effect(() => {
+      runtime.host.sessionPersistence = (sub as unknown as { sessionPersistence: SessionPersistenceLike }).sessionPersistence
+      return () => {
+        runtime.host.sessionPersistence = undefined
+      }
+    }, 'dsh-workspace: session persistence')
+  })
+
   // P1：远程会话的 Agent 工具。只在会话 cwd 属于远程工作区时注册，本地会话零影响。
   ctx.effect(
     () => mountAgentTools(ctx, { rt: runtime, bindings: runtime.bindings, preimages: runtime.preimages, defineTool: defineTool as (d: unknown) => unknown }),
@@ -244,11 +276,28 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
         handler: createSftpHttpHandler({
           rt: runtime,
           fs: runtime.files,
+          localFs: runtime.localFiles,
           trustedHosts: () => face.webRuntime.trustedHosts,
           maxUploadBytes: runtime.config.maxUploadMegabytes * 1024 * 1024
         })
       }),
     'dsh-workspace: sftp HTTP routes'
+  )
+
+  // 离线安装包上传（只检查不安装，确认后经 updateInstall 安装）。
+  ctx.effect(
+    () =>
+      face.webServer.register({
+        kind: 'prefix',
+        path: UPDATE_HTTP_PREFIX,
+        handler: createUpdateHttpHandler({
+          updater: runtime.updater,
+          dir: path.join(pluginRoot(), 'updates'),
+          log: runtime.log,
+          trustedHosts: () => face.webRuntime.trustedHosts
+        })
+      }),
+    'dsh-workspace: update upload route'
   )
 
   // 编辑器资源的 HTTP 入口（网页版可用；前端默认走远程调用，这里仅作补充）。
@@ -274,7 +323,7 @@ function mountTerminalSocket(ctx: Context, runtime: WorkspaceRuntime): void {
           grants: runtime.previews,
           trustedHosts: () => face.webRuntime.trustedHosts,
           open: async (hostId, remotePath) => {
-            const d = await runtime.files.openDownload(hostId, remotePath)
+            const d = await (isLocalId(hostId) ? runtime.localFiles : runtime.files).openDownload(hostId, remotePath)
             return { stream: d.stream, size: d.size }
           }
         })

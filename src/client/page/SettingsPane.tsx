@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 「全局配置」页签 —— 插件级开关（接管添加工作区、自动解锁）与关于信息（版本、更新日志等链接）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/SettingsPane.tsx
@@ -12,6 +12,8 @@ import type { Translate } from '../context.js'
 import { LINKS, VERSION } from '../build-info.js'
 import { emitTakeoverChange } from '../workspace/takeover.js'
 import type { useWorkspace } from './useWorkspace.js'
+import { UpdateSection } from './UpdateSection.js'
+import { emitFilesTakeoverToggle, filesTakeover, type TakeoverStatus } from '../sidebar/files-takeover.js'
 
 export interface SettingsPaneProps {
   t: Translate
@@ -57,10 +59,16 @@ function ExternalLink(props: { href: string; children: ReactNode }) {
 export function SettingsPane(props: SettingsPaneProps) {
   const { t } = props
   const [takeover, setTakeover] = useState<boolean | null>(null)
+  const [filesOn, setFilesOn] = useState<boolean | null>(null)
+  const [filesStatus, setFilesStatus] = useState<TakeoverStatus>(filesTakeover.status())
+  useEffect(() => filesTakeover.subscribe(() => setFilesStatus(filesTakeover.status())), [])
   const importRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    void props.call('getPrefs', {}).then((p) => setTakeover(p.takeoverAddWorkspace), props.onError)
+    void props.call('getPrefs', {}).then((p) => {
+      setTakeover(p.takeoverAddWorkspace)
+      setFilesOn(p.takeoverFilesSidebar)
+    }, props.onError)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -79,6 +87,32 @@ export function SettingsPane(props: SettingsPaneProps) {
       }
     )
   }
+
+  const changeFilesTakeover = (next: boolean): void => {
+    setFilesOn(next)
+    void props.call('setFilesTakeover', { enabled: next }).then(
+      (p) => {
+        setFilesOn(p.takeoverFilesSidebar)
+        // 右侧栏即时接管 / 让出，不用刷新。
+        emitFilesTakeoverToggle(p.takeoverFilesSidebar)
+      },
+      (error: unknown) => {
+        setFilesOn(!next)
+        props.onError(error)
+      }
+    )
+  }
+
+  const filesNote =
+    filesOn !== true
+      ? null
+      : filesStatus.state === 'active'
+        ? t('settings.filesTakeoverActive')
+        : filesStatus.state === 'blocked'
+          ? t(/better-sidebar/.test(filesStatus.holder) ? 'settings.filesTakeoverBetterSidebar' : 'settings.filesTakeoverBlocked', { holder: filesStatus.holder })
+          : filesStatus.state === 'pending'
+            ? t('settings.filesTakeoverPending')
+            : null
 
   const autoUnlock = props.autoUnlock
   const vault = props.vault
@@ -155,6 +189,17 @@ export function SettingsPane(props: SettingsPaneProps) {
           control={<Switch checked={takeover === true} label={t('settings.takeover')} disabled={takeover === null} onChange={changeTakeover} />}
         />
         <SettingRow
+          title={t('settings.filesTakeover')}
+          desc={
+            <>
+              {t('settings.filesTakeoverHint')}
+              {filesNote !== null ? <span className="dshws-set-note" data-tone={filesStatus.state === 'active' ? 'ok' : 'warn'}>{filesNote}</span> : null}
+            </>
+          }
+          disabled={filesOn === null}
+          control={<Switch checked={filesOn === true} label={t('settings.filesTakeover')} disabled={filesOn === null} onChange={changeFilesTakeover} />}
+        />
+        <SettingRow
           title={t('vault.autoUnlock')}
           desc={
             <>
@@ -174,6 +219,8 @@ export function SettingsPane(props: SettingsPaneProps) {
           }
         />
       </section>
+
+      <UpdateSection t={t} call={props.call} onError={props.onError} />
 
       <section className="dshws-set-card">
         <div className="dshws-section-title">{t('about.title')}</div>

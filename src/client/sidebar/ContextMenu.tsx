@@ -117,6 +117,110 @@ export function showFloat(text: string, tone: 'ok' | 'error' = 'ok'): void {
   setTimeout(() => el.remove(), hold + 250)
 }
 
+/**
+ * 在最近一次右键的位置弹出一个小浮层（输入名称 / 确认删除）。
+ * 侧栏里没有页面级的对话框服务，且桌面版（Electron）不支持 window.prompt，所以自己画一个：
+ * 直接挂到 body，回车确定、Esc 或点外面取消。
+ */
+function popover(build: (box: HTMLDivElement, done: (ok: boolean) => void) => HTMLElement | null): Promise<boolean> {
+  return new Promise((resolve) => {
+    const box = document.createElement('div')
+    box.className = 'dshws-ask'
+    box.setAttribute('role', 'dialog')
+    let settled = false
+    const done = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      document.removeEventListener('mousedown', onDown, true)
+      box.remove()
+      resolve(ok)
+    }
+    const onDown = (e: MouseEvent): void => {
+      if (!box.contains(e.target as Node)) done(false)
+    }
+    const focus = build(box, done)
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        done(false)
+      }
+    })
+    document.body.appendChild(box)
+    const p = lastPoint ?? { x: window.innerWidth / 2 - 140, y: window.innerHeight / 3 }
+    const { width, height } = box.getBoundingClientRect()
+    box.style.left = `${Math.max(8, Math.min(p.x, window.innerWidth - width - 8))}px`
+    box.style.top = `${Math.max(8, Math.min(p.y, window.innerHeight - height - 8))}px`
+    document.addEventListener('mousedown', onDown, true)
+    ;(focus ?? box).focus()
+  })
+}
+
+function button(label: string, primary: boolean, danger: boolean, onClick: () => void): HTMLButtonElement {
+  const b = document.createElement('button')
+  b.type = 'button'
+  b.className = 'dshws-ask-btn'
+  b.dataset.primary = String(primary)
+  b.dataset.danger = String(danger)
+  b.textContent = label
+  b.addEventListener('click', onClick)
+  return b
+}
+
+/** 输入一个名称；取消返回 null。validate 返回错误文案则不提交。 */
+export async function askText(options: {
+  title: string
+  initial?: string
+  okLabel: string
+  cancelLabel: string
+  validate?(value: string): string | undefined
+}): Promise<string | null> {
+  let value = ''
+  const ok = await popover((box, done) => {
+    const title = document.createElement('div')
+    title.className = 'dshws-ask-title'
+    title.textContent = options.title
+    const input = document.createElement('input')
+    input.className = 'dshws-input dshws-ask-input'
+    input.spellcheck = false
+    input.value = options.initial ?? ''
+    const note = document.createElement('div')
+    note.className = 'dshws-ask-note'
+    const submit = (): void => {
+      const problem = options.validate?.(input.value)
+      if (problem !== undefined) {
+        note.textContent = problem
+        return
+      }
+      value = input.value
+      done(true)
+    }
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit()
+    })
+    const row = document.createElement('div')
+    row.className = 'dshws-ask-row'
+    row.append(button(options.cancelLabel, false, false, () => done(false)), button(options.okLabel, true, false, submit))
+    box.append(title, input, note, row)
+    return input
+  })
+  return ok ? value : null
+}
+
+/** 确认一次危险操作。 */
+export function askConfirm(options: { message: string; okLabel: string; cancelLabel: string; danger?: boolean }): Promise<boolean> {
+  return popover((box, done) => {
+    const text = document.createElement('div')
+    text.className = 'dshws-ask-message'
+    text.textContent = options.message
+    const ok = button(options.okLabel, true, options.danger === true, () => done(true))
+    const row = document.createElement('div')
+    row.className = 'dshws-ask-row'
+    row.append(button(options.cancelLabel, false, false, () => done(false)), ok)
+    box.append(text, row)
+    return ok
+  })
+}
+
 /** 复制文本到系统剪贴板；navigator.clipboard 不可用（非安全上下文）时退回 execCommand。 */
 export async function copyText(text: string): Promise<void> {
   try {

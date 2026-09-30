@@ -1,19 +1,23 @@
 /*
- * @Description: 在远程工作区里执行 git（经 SSH），供右侧栏「远程 Git」面板使用
+ * @Description: 在工作区里执行 git，供右侧栏「Git 仓库」面板使用（远程经 SSH，本地直接起进程）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/git/remote-git.ts
  *
+ * 仓库逻辑（GitRepo）与「怎么执行 git」（GitRunner）分开：
+ * - 远程：argv 逐个单引号转义后拼成 `cd <root> && git ...`，经 SSH exec 执行（RemoteGit）
+ * - 本地：child_process 直接以 argv 启动 git，不经过 shell（local/local-git.ts）
+ *
  * 安全边界：
- * - 只在「已登记的远程工作区根目录」里执行（由网关校验根目录属于该主机的绑定）
+ * - 只在「已登记的工作区根目录」里执行（由网关校验：远程 = 该主机的绑定，本地 = 会话 cwd）
  * - 文件路径必须是仓库内相对路径（不许绝对路径、不许 ..），一律放在 -- 之后，不会被当成选项
  * - 查看分支只接受完整引用名（refs/heads|remotes|tags/…），先 rev-parse 成提交号再使用
  * - 不做检出：查看其他分支全程只读对象库，不改 HEAD、暂存区与工作区
- * - 所有参数单引号转义后拼接（sq）
+ * - core.fsmonitor=false：恶意仓库的 .git/config 可借 fsmonitor 在 status 时执行任意命令
  */
 import { createHash } from 'node:crypto'
 import { sq } from '../agent/backend.js'
 import type { WorkspaceRuntime } from '../runtime.js'
-import { execCapture } from '../sftp/exec.js'
+import { execCapture, type ExecOptions, type ExecResult } from '../sftp/exec.js'
 import {
   BRANCH_FORMAT,
   LOG_FORMAT,
@@ -35,7 +39,7 @@ import {
 export type { GitBranch, GitChangedFile, GitCommit, GitStatus, GitTreeEntry }
 
 /** diff 两侧内容的单边上限：超过就只提示「文件过大」，不把几十 MB 塞进浏览器。 */
-const DIFF_SIDE_MAX = 2 * 1024 * 1024
+export const DIFF_SIDE_MAX = 2 * 1024 * 1024
 
 export interface DiffSides {
   original: string
@@ -44,23 +48,48 @@ export interface DiffSides {
   tooLarge: boolean
 }
 
-interface RunOpts {
+export interface RunOpts {
   timeoutMs?: number
   maxBytes?: number
+  /** 改用该临时索引文件（GIT_INDEX_FILE）。 */
   index?: string
   input?: string
 }
 
+/** 每条 git 命令都带的全局参数。 */
+export const GIT_GLOBAL_ARGS = ['-c', 'core.quotepath=false', '-c', 'color.ui=never', '-c', 'core.fsmonitor=false']
+
+/**
+ * 执行 git 与读写仓库内少量辅助文件（临时索引记录）的方式。
+ * 路径参数都是仓库所在机器上的绝对路径（本地为 git 输出的正斜杠形式，如 C:/x/.git）。
+ */
+export interface GitRunner {
+  /** 在工作目录执行 git（argv 不含 git 本身与全局参数）；非零退出码不抛错。 */
+  git(argv: string[], options: RunOpts): Promise<ExecResult>
+  /** 读工作目录里的文件（仓库内相对路径），最多 maxBytes 字节。 */
+  catRelative(rel: string, maxBytes: number): Promise<{ stdout: string; code: number | null; truncated: boolean }>
+  /** 读文本文件；不存在返回 undefined。 */
+  readText(abs: string): Promise<string | undefined>
+  exists(abs: string): Promise<boolean>
+  writeText(abs: string, text: string): Promise<void>
+  mkdirp(abs: string): Promise<void>
+  rm(abs: readonly string[]): Promise<void>
+  /** 路径比较键：本地 Windows 不区分大小写、统一正斜杠；远程原样。 */
+  pathKey(p: string): string
+  /** 没装 git 时的提示。 */
+  readonly noGitMessage: string
+}
+
 /**
  * 查看分支时的编辑方式（每次写操作前都会重新判断，对用户无感）：
- * - worktree：就是远程目录当前检出的分支 —— 直接读写文件，改动 / 提交走普通 git status / commit
+ * - worktree：就是工作目录当前检出的分支 —— 直接读写文件，改动 / 提交走普通 git status / commit
  * - index：其他本地分支 —— 改动存在本插件的临时索引里，提交用 commit-tree + update-ref，不碰工作目录
  * - worktree 也包括「在另一个 git worktree 里检出的分支」：直接在那个目录里改、提交
  * - readonly：远程分支 / 标签（需先建本地分支），或检出所在目录已被删除的分支
  */
 export interface BranchInfo {
   mode: 'worktree' | 'index' | 'readonly'
-  /** worktree 模式：直接读写、提交所在的远程目录（当前分支 = 工作区根；另一个 git worktree = 那个目录）。 */
+  /** worktree 模式：直接读写、提交所在的目录（当前分支 = 工作区根；另一个 git worktree = 那个目录）。 */
   worktreePath?: string
   reason?: 'remote' | 'tag' | 'otherWorktree'
   /** 分支当前指向的提交。 */
@@ -80,7 +109,7 @@ export class GitError extends Error {}
 /** 仓库内相对路径校验。 */
 export function checkRepoPath(p: string): string {
   const normalized = p.replace(/\\/g, '/')
-  if (normalized === '' || normalized.startsWith('/') || normalized.includes('\0') || normalized.split('/').includes('..')) {
+  if (normalized === '' || normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized) || normalized.includes('\0') || normalized.split('/').includes('..')) {
     throw new GitError(`非法路径：${p}`)
   }
   return normalized
@@ -91,48 +120,32 @@ export function checkHash(h: string): string {
   return h
 }
 
-export class RemoteGit {
+const EMPTY_SIDE = { text: '', binary: false, tooLarge: false }
+
+export class GitRepo {
   constructor(
-    private readonly rt: WorkspaceRuntime,
-    private readonly hostId: string,
-    private readonly root: string
+    protected readonly runner: GitRunner,
+    /** 工作目录（git 所在机器上的路径）。 */
+    protected readonly root: string
   ) {}
 
-  /**
-   * 执行一条 git 命令；返回原始结果（非零退出码不抛错，由调用方判断）。
-   * index：改用该临时索引文件（GIT_INDEX_FILE）—— 编辑非检出分支时用，不碰工作目录真正的暂存区。
-   */
-  private async run(args: string, options: RunOpts = {}) {
-    const connection = await this.rt.pool.acquire(this.hostId, 'agent', () => this.rt.resolveHost(this.hostId))
-    const env = options.index === undefined ? '' : `GIT_INDEX_FILE=${sq(options.index)} `
-    // core.quotepath=false：中文路径原样输出；color.ui=never：不夹带颜色控制符。
-    const command = `cd ${sq(this.root)} && ${env}git -c core.quotepath=false -c color.ui=never ${args}`
-    return await execCapture(connection, command, {
-      timeoutMs: options.timeoutMs ?? 30_000,
-      maxBytes: options.maxBytes ?? 8 * 1024 * 1024,
-      ...(options.input !== undefined ? { input: options.input } : {})
-    })
+  private run(argv: string[], options: RunOpts = {}): Promise<ExecResult> {
+    return this.runner.git(argv, options)
   }
 
-  /** 在仓库根目录执行一条非 git 的 shell 命令（只用于读写本插件自己的临时索引文件）。 */
-  private async sh(command: string) {
-    const connection = await this.rt.pool.acquire(this.hostId, 'agent', () => this.rt.resolveHost(this.hostId))
-    return await execCapture(connection, `cd ${sq(this.root)} && ${command}`, { timeoutMs: 30_000, maxBytes: 1 << 20 })
-  }
-
-  private async runOk(args: string, options?: RunOpts): Promise<string> {
-    const r = await this.run(args, options)
-    if (r.timedOut) throw new GitError(`git 命令超时：git ${args.slice(0, 80)}`)
+  private async runOk(argv: string[], options?: RunOpts): Promise<string> {
+    const r = await this.run(argv, options)
+    if (r.timedOut) throw new GitError(`git 命令超时：git ${argv.join(' ').slice(0, 80)}`)
     if (r.code !== 0) throw new GitError((r.stderr.trim() || r.stdout.trim() || `git 退出码 ${String(r.code)}`).slice(0, 2000))
     return r.stdout
   }
 
   async status(): Promise<GitStatus | { isRepo: false; reason: string }> {
-    const r = await this.run('status --porcelain=v2 --branch -z --untracked-files=all')
+    const r = await this.run(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'])
     if (r.code !== 0) {
       const reason = r.stderr.trim()
       if (/not a git repository/i.test(reason)) return { isRepo: false, reason: '该目录不是 Git 仓库。' }
-      if (/command not found|not found/i.test(reason)) return { isRepo: false, reason: '远程主机未安装 git。' }
+      if (/command not found|not found|ENOENT/i.test(reason)) return { isRepo: false, reason: this.runner.noGitMessage }
       throw new GitError(reason || `git status 失败（退出码 ${String(r.code)}）`)
     }
     return { isRepo: true, ...parseStatusV2(r.stdout) }
@@ -142,7 +155,16 @@ export class RemoteGit {
   async log(skip: number, limit: number, ref?: string): Promise<GitCommit[]> {
     const scope = ref === undefined ? '--all' : await this.resolve(ref)
     // --decorate=full：装饰给出完整引用名（refs/remotes/…、tag: refs/tags/…），界面据此准确区分远程 / 本地 / 标签。
-    const r = await this.run(`log ${scope} --decorate=full --topo-order --skip=${Math.max(0, skip | 0)} -n ${Math.min(1000, Math.max(1, limit | 0))} --format=${sq(LOG_FORMAT)}`)
+    const r = await this.run([
+      'log',
+      scope,
+      '--decorate=full',
+      '--topo-order',
+      `--skip=${Math.max(0, skip | 0)}`,
+      '-n',
+      String(Math.min(1000, Math.max(1, limit | 0))),
+      `--format=${LOG_FORMAT}`
+    ])
     // 空仓库（还没有提交）时 log 报错：视为没有历史。
     if (r.code !== 0) {
       if (/does not have any commits|bad default revision|unknown revision/i.test(r.stderr)) return []
@@ -152,7 +174,7 @@ export class RemoteGit {
   }
 
   async branches(): Promise<GitBranch[]> {
-    return parseBranches(await this.runOk(`for-each-ref --sort=-committerdate --format=${sq(BRANCH_FORMAT)} refs/heads refs/remotes`))
+    return parseBranches(await this.runOk(['for-each-ref', '--sort=-committerdate', `--format=${BRANCH_FORMAT}`, 'refs/heads', 'refs/remotes']))
   }
 
   /** 某个提交改了哪些文件（合并提交相对第一个父提交）。 */
@@ -160,22 +182,21 @@ export class RemoteGit {
     const h = checkHash(hash)
     const out =
       parent === null
-        ? await this.runOk(`diff-tree --no-commit-id --root -r -z -M --name-status ${h}`)
-        : await this.runOk(`diff -z -M --name-status ${checkHash(parent)} ${h}`)
+        ? await this.runOk(['diff-tree', '--no-commit-id', '--root', '-r', '-z', '-M', '--name-status', h])
+        : await this.runOk(['diff', '-z', '-M', '--name-status', checkHash(parent), h])
     return parseNameStatus(out)
   }
 
   /** 取某个版本的文件内容；不存在返回 ''。index 给出时 `:路径` 读该临时索引里的版本。 */
   private async blob(spec: string, index?: string): Promise<{ text: string; binary: boolean; tooLarge: boolean }> {
-    const r = await this.run(`show ${sq(spec)}`, { maxBytes: DIFF_SIDE_MAX + 1, ...(index !== undefined ? { index } : {}) })
-    if (r.code !== 0 && !r.truncated) return { text: '', binary: false, tooLarge: false }
+    const r = await this.run(['show', spec], { maxBytes: DIFF_SIDE_MAX + 1, ...(index !== undefined ? { index } : {}) })
+    if (r.code !== 0 && !r.truncated) return EMPTY_SIDE
     return sideOf(r.stdout, r.truncated)
   }
 
   private async worktreeFile(path: string): Promise<{ text: string; binary: boolean; tooLarge: boolean }> {
-    const connection = await this.rt.pool.acquire(this.hostId, 'agent', () => this.rt.resolveHost(this.hostId))
-    const r = await execCapture(connection, `cd ${sq(this.root)} && cat -- ${sq(path)}`, { timeoutMs: 30_000, maxBytes: DIFF_SIDE_MAX + 1 })
-    if (r.code !== 0 && !r.truncated) return { text: '', binary: false, tooLarge: false }
+    const r = await this.runner.catRelative(path, DIFF_SIDE_MAX + 1)
+    if (r.code !== 0 && !r.truncated) return EMPTY_SIDE
     return sideOf(r.stdout, r.truncated)
   }
 
@@ -185,7 +206,7 @@ export class RemoteGit {
     let b: { text: string; binary: boolean; tooLarge: boolean }
     if (target.kind === 'worktree') {
       // 未暂存改动：暂存区（没有则 HEAD / 空）→ 工作区。
-      a = target.untracked === true ? { text: '', binary: false, tooLarge: false } : await this.blob(`:${path}`)
+      a = target.untracked === true ? EMPTY_SIDE : await this.blob(`:${path}`)
       b = await this.worktreeFile(path)
     } else if (target.kind === 'staged') {
       a = await this.blob(`HEAD:${path}`)
@@ -194,43 +215,43 @@ export class RemoteGit {
       // 分支上未提交的改动：基准提交 → 临时索引。
       const { index, base } = await this.pendingState(target.ref)
       const orig = target.origPath === undefined ? path : checkRepoPath(target.origPath)
-      a = base === null ? { text: '', binary: false, tooLarge: false } : await this.blob(`${base}:${orig}`)
+      a = base === null ? EMPTY_SIDE : await this.blob(`${base}:${orig}`)
       b = index === null ? a : await this.blob(`:${path}`, index)
     } else {
       const hash = checkHash(target.hash)
       const orig = target.origPath === undefined ? path : checkRepoPath(target.origPath)
-      a = target.parent === null ? { text: '', binary: false, tooLarge: false } : await this.blob(`${checkHash(target.parent)}:${orig}`)
+      a = target.parent === null ? EMPTY_SIDE : await this.blob(`${checkHash(target.parent)}:${orig}`)
       b = await this.blob(`${hash}:${path}`)
     }
     return { original: a.text, modified: b.text, binary: a.binary || b.binary, tooLarge: a.tooLarge || b.tooLarge }
   }
 
-  private pathArgs(paths: readonly string[]): string {
+  private pathArgs(paths: readonly string[]): string[] {
     if (paths.length === 0) throw new GitError('没有选择文件')
-    return paths.map((p) => sq(checkRepoPath(p))).join(' ')
+    return paths.map((p) => checkRepoPath(p))
   }
 
   async stage(paths: readonly string[]): Promise<void> {
-    await this.runOk(`add -A -- ${this.pathArgs(paths)}`)
+    await this.runOk(['add', '-A', '--', ...this.pathArgs(paths)])
   }
 
   async unstage(paths: readonly string[]): Promise<void> {
-    const hasHead = (await this.run('rev-parse --verify -q HEAD')).code === 0
+    const hasHead = (await this.run(['rev-parse', '--verify', '-q', 'HEAD'])).code === 0
     // 还没有任何提交时没有 HEAD 可以 reset，只能从暂存区移除。
-    await this.runOk(hasHead ? `reset -q -- ${this.pathArgs(paths)}` : `rm --cached -r -q -- ${this.pathArgs(paths)}`)
+    await this.runOk(hasHead ? ['reset', '-q', '--', ...this.pathArgs(paths)] : ['rm', '--cached', '-r', '-q', '--', ...this.pathArgs(paths)])
   }
 
   /** 丢弃工作区改动：已跟踪文件恢复为暂存区版本；未跟踪文件删除。 */
   async discard(tracked: readonly string[], untracked: readonly string[]): Promise<void> {
-    if (tracked.length > 0) await this.runOk(`checkout -- ${this.pathArgs(tracked)}`)
-    if (untracked.length > 0) await this.runOk(`clean -f -q -- ${this.pathArgs(untracked)}`)
+    if (tracked.length > 0) await this.runOk(['checkout', '--', ...this.pathArgs(tracked)])
+    if (untracked.length > 0) await this.runOk(['clean', '-f', '-q', '--', ...this.pathArgs(untracked)])
   }
 
   async commit(message: string): Promise<string> {
     const text = message.trim()
     if (text === '') throw new GitError('提交说明不能为空')
-    await this.runOk(`commit -q -m ${sq(text)}`)
-    return (await this.runOk('rev-parse --short HEAD')).trim()
+    await this.runOk(['commit', '-q', '-m', text])
+    return (await this.runOk(['rev-parse', '--short', 'HEAD'])).trim()
   }
 
   // ---------------------------------------------------------------- 只读查看其他分支（不检出）
@@ -238,7 +259,7 @@ export class RemoteGit {
   /** 引用 → 提交号。只接受可查看的引用；不存在时报错。 */
   async resolve(ref: string): Promise<string> {
     if (!isViewableRef(ref)) throw new GitError(`非法引用：${ref}`)
-    const r = await this.run(`rev-parse --verify -q ${sq(`${ref}^{commit}`)}`)
+    const r = await this.run(['rev-parse', '--verify', '-q', `${ref}^{commit}`])
     const hash = r.stdout.trim()
     if (r.code !== 0 || !/^[0-9a-f]{40,64}$/.test(hash)) throw new GitError(`找不到分支或提交：${ref}`)
     return hash
@@ -251,9 +272,9 @@ export class RemoteGit {
   async tree(ref: string, dir: string): Promise<{ hash: string; entries: GitTreeEntry[] }> {
     const hash = await this.resolve(ref)
     const { index } = await this.pendingState(ref)
-    const treeish = index === null ? hash : (await this.runOk('write-tree', { index })).trim()
+    const treeish = index === null ? hash : (await this.runOk(['write-tree'], { index })).trim()
     const d = dir === '' ? '' : checkRepoPath(dir).replace(/\/+$/, '')
-    const out = await this.runOk(`ls-tree -z -l ${sq(d === '' ? treeish : `${treeish}:${d}`)}`)
+    const out = await this.runOk(['ls-tree', '-z', '-l', d === '' ? treeish : `${treeish}:${d}`])
     return { hash, entries: parseLsTree(out, d) }
   }
 
@@ -271,7 +292,7 @@ export class RemoteGit {
   private gitDirCache: string | undefined
 
   private async gitDir(): Promise<string> {
-    if (this.gitDirCache === undefined) this.gitDirCache = (await this.runOk('rev-parse --absolute-git-dir')).trim()
+    if (this.gitDirCache === undefined) this.gitDirCache = (await this.runOk(['rev-parse', '--absolute-git-dir'])).trim()
     return this.gitDirCache
   }
 
@@ -286,9 +307,9 @@ export class RemoteGit {
   private async pendingState(ref: string): Promise<{ index: string | null; base: string | null }> {
     if (!isViewableRef(ref) || !ref.startsWith('refs/heads/')) return { index: null, base: null }
     const f = await this.indexFiles(ref)
-    const r = await this.sh(`test -f ${sq(f.index)} && cat ${sq(f.baseFile)}`)
-    const base = r.stdout.trim()
-    if (r.code !== 0 || !/^[0-9a-f]{40,64}$/.test(base)) return { index: null, base: null }
+    if (!(await this.runner.exists(f.index))) return { index: null, base: null }
+    const base = (await this.runner.readText(f.baseFile))?.trim() ?? ''
+    if (!/^[0-9a-f]{40,64}$/.test(base)) return { index: null, base: null }
     return { index: f.index, base }
   }
 
@@ -297,7 +318,7 @@ export class RemoteGit {
     const tip = await this.resolve(ref)
     if (ref.startsWith('refs/remotes/')) return { mode: 'readonly', reason: 'remote', tip, pending: 0 }
     if (ref.startsWith('refs/tags/') || ref === 'HEAD') return { mode: 'readonly', reason: 'tag', tip, pending: 0 }
-    const head = (await this.run('symbolic-ref -q HEAD')).stdout.trim()
+    const head = (await this.run(['symbolic-ref', '-q', 'HEAD'])).stdout.trim()
     if (head === ref) return { mode: 'worktree', worktreePath: this.root, tip, pending: 0 }
     // 在另一个 git worktree 里检出的分支：不能走临时索引（改引用会让那个目录与提交对不上），
     // 而是直接在那个目录里改文件、提交 —— 与当前分支同一种方式，用户无感。
@@ -311,7 +332,7 @@ export class RemoteGit {
 
   /** 本仓库的全部 git 工作目录（第一个是主工作目录）。 */
   async worktrees(): Promise<GitWorktree[]> {
-    const r = await this.run('worktree list --porcelain')
+    const r = await this.run(['worktree', 'list', '--porcelain'])
     return r.code === 0 ? parseWorktrees(r.stdout) : []
   }
 
@@ -320,17 +341,18 @@ export class RemoteGit {
    * （/repo/sub → /wt/feature/sub），文件树与本分支看到的范围一致。
    */
   private async mapToWorktree(worktreeTop: string): Promise<string> {
-    const top = (await this.runOk('rev-parse --show-toplevel')).trim().replace(/\/+$/, '')
-    const root = this.root.replace(/\/+$/, '')
-    const rel = root === top ? '' : root.startsWith(`${top}/`) ? root.slice(top.length) : ''
-    return `${worktreeTop.replace(/\/+$/, '')}${rel}`
+    const top = (await this.runOk(['rev-parse', '--show-toplevel'])).trim().replace(/[\\/]+$/, '')
+    const root = this.root.replace(/[\\/]+$/, '')
+    const k = (p: string): string => this.runner.pathKey(p)
+    const rel = k(root) === k(top) ? '' : k(root).startsWith(`${k(top)}/`) ? root.slice(top.length).replace(/\\/g, '/') : ''
+    return `${worktreeTop.replace(/[\\/]+$/, '')}${rel}`
   }
 
   /** 某路径是不是本仓库某个工作目录（含映射后的子目录）：网关据此允许在该目录执行 git。 */
   async isOwnWorktree(path: string): Promise<boolean> {
-    const target = path.replace(/\/+$/, '')
-    if (target === this.root.replace(/\/+$/, '')) return true
-    return (await this.worktreeRoots()).includes(target)
+    const k = (p: string): string => this.runner.pathKey(p.replace(/[\\/]+$/, ''))
+    if (k(path) === k(this.root)) return true
+    return (await this.worktreeRoots()).some((w) => k(w) === k(path))
   }
 
   /** 本仓库各工作目录（映射到与工作区根相同的子目录；不含已删除的）。不是 git 仓库时为空。 */
@@ -342,7 +364,7 @@ export class RemoteGit {
 
   private async requireIndexMode(ref: string): Promise<BranchInfo> {
     const info = await this.branchInfo(ref)
-    if (info.mode === 'worktree') throw new GitError('该分支已是远程目录当前检出的分支，请刷新后在改动页操作。')
+    if (info.mode === 'worktree') throw new GitError('该分支已是工作目录当前检出的分支，请刷新后在改动页操作。')
     if (info.mode === 'readonly') throw new GitError(info.reason === 'otherWorktree' ? '该分支检出所在的工作目录已不存在（可在终端执行 git worktree prune）。' : '远程分支与标签不能直接修改，请先基于它新建本地分支。')
     return info
   }
@@ -356,13 +378,16 @@ export class RemoteGit {
     const state = await this.pendingState(ref)
     if (state.index !== null && state.base === tip) return state.index
     if (state.index !== null && state.base !== null) {
-      const pending = parseNameStatus(await this.runOk(`diff-index --cached -z -M --name-status ${state.base}`, { index: state.index }))
+      const pending = parseNameStatus(await this.runOk(['diff-index', '--cached', '-z', '-M', '--name-status', state.base], { index: state.index }))
       if (pending.length > 0) return state.index
     }
-    await this.sh(`mkdir -p ${sq(f.dir)}`)
-    await this.runOk(`read-tree ${tip}`, { index: f.index })
-    const w = await this.sh(`printf %s ${sq(tip)} > ${sq(f.baseFile)}`)
-    if (w.code !== 0) throw new GitError(`无法写入临时索引：${w.stderr.trim()}`)
+    await this.runner.mkdirp(f.dir)
+    await this.runOk(['read-tree', tip], { index: f.index })
+    try {
+      await this.runner.writeText(f.baseFile, tip)
+    } catch (error) {
+      throw new GitError(`无法写入临时索引：${error instanceof Error ? error.message : String(error)}`)
+    }
     return f.index
   }
 
@@ -370,7 +395,7 @@ export class RemoteGit {
   async branchChanges(ref: string): Promise<{ base: string | null; files: GitChangedFile[] }> {
     const { index, base } = await this.pendingState(ref)
     if (index === null || base === null) return { base: null, files: [] }
-    return { base, files: parseNameStatus(await this.runOk(`diff-index --cached -z -M --name-status ${base}`, { index })) }
+    return { base, files: parseNameStatus(await this.runOk(['diff-index', '--cached', '-z', '-M', '--name-status', base], { index })) }
   }
 
   /** 保存一个文件到分支（写入临时索引，尚未提交）。 */
@@ -378,12 +403,12 @@ export class RemoteGit {
     const p = checkRepoPath(path)
     const info = await this.requireIndexMode(ref)
     const index = await this.ensureIndex(ref, info.tip)
-    const blob = (await this.runOk('hash-object -w --stdin', { input: content })).trim()
+    const blob = (await this.runOk(['hash-object', '-w', '--stdin'], { input: content })).trim()
     if (!/^[0-9a-f]{40,64}$/.test(blob)) throw new GitError('写入文件内容失败')
     // 保留原文件的权限位（如可执行脚本 100755）；新文件用 100644。
-    const existing = (await this.runOk(`ls-files -s -z -- ${sq(p)}`, { index })).split(/\s/)[0]
+    const existing = (await this.runOk(['ls-files', '-s', '-z', '--', p], { index })).split(/\s/)[0]
     const mode = existing !== undefined && /^1[0-7]{5}$/.test(existing) ? existing : '100644'
-    await this.runOk(`update-index --add --cacheinfo ${mode} ${blob} ${sq(p)}`, { index })
+    await this.runOk(['update-index', '--add', '--cacheinfo', mode, blob, p], { index })
   }
 
   /** 撤销分支上某些文件的未提交改动（临时索引里恢复为基准版本）。 */
@@ -391,14 +416,14 @@ export class RemoteGit {
     await this.requireIndexMode(ref)
     const { index, base } = await this.pendingState(ref)
     if (index === null || base === null) return
-    await this.runOk(`reset -q ${base} -- ${this.pathArgs(paths)}`, { index })
+    await this.runOk(['reset', '-q', base, '--', ...this.pathArgs(paths)], { index })
   }
 
   /** 丢弃分支上全部未提交改动。 */
   async branchDiscard(ref: string): Promise<void> {
     if (!isViewableRef(ref) || !ref.startsWith('refs/heads/')) throw new GitError(`非法引用：${ref}`)
     const f = await this.indexFiles(ref)
-    await this.sh(`rm -f -- ${sq(f.index)} ${sq(f.baseFile)} ${sq(`${f.index}.replay`)}`)
+    await this.runner.rm([f.index, f.baseFile, `${f.index}.replay`])
   }
 
   /**
@@ -411,36 +436,36 @@ export class RemoteGit {
     const info = await this.requireIndexMode(ref)
     const { index, base } = await this.pendingState(ref)
     if (index === null || base === null) throw new GitError('该分支没有未提交的改动')
-    const changes = parseNameStatus(await this.runOk(`diff-index --cached -z -M --name-status ${base}`, { index }))
+    const changes = parseNameStatus(await this.runOk(['diff-index', '--cached', '-z', '-M', '--name-status', base], { index }))
     if (changes.length === 0) throw new GitError('该分支没有未提交的改动')
 
     let tree: string
     if (base === info.tip) {
-      tree = (await this.runOk('write-tree', { index })).trim()
+      tree = (await this.runOk(['write-tree'], { index })).trim()
     } else {
       const touched = new Set(changes.flatMap((c) => (c.origPath === undefined ? [c.path] : [c.path, c.origPath])))
-      const upstream = (await this.runOk(`diff --name-only -z ${base} ${info.tip}`)).split('\0').filter(Boolean)
+      const upstream = (await this.runOk(['diff', '--name-only', '-z', base, info.tip])).split('\0').filter(Boolean)
       const clash = upstream.filter((p) => touched.has(p))
       if (clash.length > 0) {
         throw new GitError(`编辑期间该分支已有新提交，且同样改动了：${clash.slice(0, 5).join('、')}。请撤销这些文件的改动后重新编辑。`)
       }
       const replay = `${index}.replay`
-      await this.runOk(`read-tree ${info.tip}`, { index: replay })
+      await this.runOk(['read-tree', info.tip], { index: replay })
       for (const p of touched) {
-        const entry = (await this.runOk(`ls-files -s -z -- ${sq(p)}`, { index })).split(/\s/)
+        const entry = (await this.runOk(['ls-files', '-s', '-z', '--', p], { index })).split(/\s/)
         const [mode, blob] = entry
         if (mode !== undefined && blob !== undefined && /^[0-9a-f]{40,64}$/.test(blob)) {
-          await this.runOk(`update-index --add --cacheinfo ${mode} ${blob} ${sq(p)}`, { index: replay })
+          await this.runOk(['update-index', '--add', '--cacheinfo', mode, blob, p], { index: replay })
         } else {
-          await this.runOk(`update-index --force-remove -- ${sq(p)}`, { index: replay })
+          await this.runOk(['update-index', '--force-remove', '--', p], { index: replay })
         }
       }
-      tree = (await this.runOk('write-tree', { index: replay })).trim()
+      tree = (await this.runOk(['write-tree'], { index: replay })).trim()
     }
-    const commit = (await this.runOk(`commit-tree ${tree} -p ${info.tip} -F -`, { input: text })).trim()
+    const commit = (await this.runOk(['commit-tree', tree, '-p', info.tip, '-F', '-'], { input: text })).trim()
     if (!/^[0-9a-f]{40,64}$/.test(commit)) throw new GitError('生成提交失败')
     // 带旧值更新：这一瞬间分支若被别人改了，git 拒绝更新，不会覆盖别人的提交。
-    await this.runOk(`update-ref -m ${sq(`dsh-workspace: ${text.split('\n')[0]}`)} ${sq(ref)} ${commit} ${info.tip}`)
+    await this.runOk(['update-ref', '-m', `dsh-workspace: ${text.split('\n')[0]}`, ref, commit, info.tip])
     await this.branchDiscard(ref)
     return commit.slice(0, 12)
   }
@@ -449,12 +474,12 @@ export class RemoteGit {
   async createBranch(name: string, from: string): Promise<string> {
     const branch = name.trim()
     if (branch === '' || branch.startsWith('-')) throw new GitError(`非法分支名：${name}`)
-    const valid = await this.run(`check-ref-format --branch ${sq(branch)}`)
+    const valid = await this.run(['check-ref-format', '--branch', branch])
     if (valid.code !== 0) throw new GitError(`非法分支名：${branch}`)
     const hash = await this.resolve(from)
     const ref = `refs/heads/${branch}`
     // 旧值为空：分支已存在时 git 拒绝，不会覆盖。
-    const r = await this.run(`update-ref ${sq(ref)} ${hash} ''`)
+    const r = await this.run(['update-ref', ref, hash, ''])
     if (r.code !== 0) throw new GitError(/exists|already/i.test(r.stderr) ? `分支已存在：${branch}` : r.stderr.trim())
     return ref
   }
@@ -463,7 +488,57 @@ export class RemoteGit {
   async compare(base: string, target: string): Promise<{ base: string; target: string; files: GitChangedFile[] }> {
     const b = await this.resolve(base)
     const t = await this.resolve(target)
-    return { base: b, target: t, files: parseNameStatus(await this.runOk(`diff -z -M --name-status ${b} ${t}`)) }
+    return { base: b, target: t, files: parseNameStatus(await this.runOk(['diff', '-z', '-M', '--name-status', b, t])) }
+  }
+}
+
+/** 在远端执行一条 shell 命令（SSH exec）。抽出来便于测试用本机 sh 代替。 */
+export type ShellExec = (command: string, options: ExecOptions) => Promise<ExecResult>
+
+/** 远程执行：经 SSH exec，argv 逐个单引号转义后拼成一条 shell 命令。 */
+export function shellGitRunner(exec: ShellExec, root: string): GitRunner {
+  const sh = (command: string) => exec(`cd ${sq(root)} && ${command}`, { timeoutMs: 30_000, maxBytes: 1 << 20 })
+  return {
+    noGitMessage: '远程主机未安装 git。',
+    pathKey: (p) => p,
+    async git(argv, options) {
+      const env = options.index === undefined ? '' : `GIT_INDEX_FILE=${sq(options.index)} `
+      const command = `cd ${sq(root)} && ${env}git ${[...GIT_GLOBAL_ARGS, ...argv].map(sq).join(' ')}`
+      return await exec(command, {
+        timeoutMs: options.timeoutMs ?? 30_000,
+        maxBytes: options.maxBytes ?? 8 * 1024 * 1024,
+        ...(options.input !== undefined ? { input: options.input } : {})
+      })
+    },
+    async catRelative(rel, maxBytes) {
+      return await exec(`cd ${sq(root)} && cat -- ${sq(rel)}`, { timeoutMs: 30_000, maxBytes })
+    },
+    async readText(abs) {
+      const r = await sh(`test -f ${sq(abs)} && cat ${sq(abs)}`)
+      return r.code === 0 ? r.stdout : undefined
+    },
+    async exists(abs) {
+      return (await sh(`test -e ${sq(abs)}`)).code === 0
+    },
+    async writeText(abs, text) {
+      const r = await sh(`printf %s ${sq(text)} > ${sq(abs)}`)
+      if (r.code !== 0) throw new Error(r.stderr.trim() || `退出码 ${String(r.code)}`)
+    },
+    async mkdirp(abs) {
+      await sh(`mkdir -p ${sq(abs)}`)
+    },
+    async rm(abs) {
+      await sh(`rm -f -- ${abs.map(sq).join(' ')}`)
+    }
+  }
+}
+
+/** 远程工作区的 git（保持原有构造方式：运行时 + 主机 + 远程根目录）。 */
+export class RemoteGit extends GitRepo {
+  constructor(rt: WorkspaceRuntime, hostId: string, root: string) {
+    const exec: ShellExec = async (command, options) =>
+      execCapture(await rt.pool.acquire(hostId, 'agent', () => rt.resolveHost(hostId)), command, options)
+    super(shellGitRunner(exec, root), root)
   }
 }
 

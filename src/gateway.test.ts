@@ -1,11 +1,11 @@
-/*
+﻿/*
  * @Description: 网关（浏览器可调用的全部远程方法）与 Typert 清单的测试
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/gateway.test.ts
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -583,5 +583,24 @@ describe('文件接口', () => {
     const codec = list.parameters[0]?.codec
     expect(() => codec?.schema.parse({ hostId: 'h', path: 'relative/p' })).toThrow()
     expect(() => codec?.schema.parse({ hostId: 'h', path: '/abs' })).not.toThrow()
+  })
+})
+
+describe('本地工作区（hostId = local:<会话 id>）', () => {
+  it('文件与 git 都按会话 cwd 在本机执行，不查保险箱；工作区外的路径被拒', async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), 'dshws-gw-local-'))
+    writeFileSync(path.join(ws, 'a.txt'), 'hello')
+    rt.host.sessions = { get: (id) => (id === 's1' ? { header: { cwd: ws } } : undefined) }
+    const lp = (p: string): string => (process.platform === 'win32' ? `/${p.replace(/\\/g, '/')}` : p)
+    const root = lp(realpathSync(ws))
+    const listed = await gw.sftpList({ hostId: 'local:s1', path: root })
+    expect(listed.entries.map((e) => e.name)).toEqual(['a.txt'])
+    expect((await gw.sftpRead({ hostId: 'local:s1', path: `${root}/a.txt` })).content).toBe('hello')
+    expect(await gw.sftpHome({ hostId: 'local:s1' })).toEqual({ path: root })
+    await expect(gw.sftpList({ hostId: 'local:s1', path: lp(realpathSync(tmpdir())) })).rejects.toThrow(/不在当前工作区内/)
+    await expect(gw.sftpList({ hostId: 'local:nope', path: root })).rejects.toThrow(/会话没有工作目录/)
+    const status = (await gw.git({ hostId: 'local:s1', root, op: 'status' })) as { isRepo: boolean }
+    expect(status.isRepo).toBe(false)
+    rmSync(ws, { recursive: true, force: true })
   })
 })

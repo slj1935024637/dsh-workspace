@@ -1,5 +1,5 @@
-/*
- * @Description: 插件偏好设置（目前只有用户自定义的忽略规则）
+﻿/*
+ * @Description: 插件偏好设置（忽略规则、接管「添加工作区」、接管「文件」侧栏）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/prefs.ts
  */
@@ -17,9 +17,14 @@ export interface Prefs {
    * 默认开启；关闭后恢复 DSH 原来的选择器（刷新页面生效）。
    */
   takeoverAddWorkspace: boolean
+  /**
+   * 接管 DSH 自带的「文件」侧栏（kind files），换成本插件的「文件管理」。默认开启；
+   * 其他插件（如 better-sidebar）已接管时不抢，只提示。
+   */
+  takeoverFilesSidebar: boolean
 }
 
-const DEFAULTS: Prefs = { ignore: [], takeoverAddWorkspace: true }
+const DEFAULTS: Prefs = { ignore: [], takeoverAddWorkspace: true, takeoverFilesSidebar: true }
 
 export function prefsFile(): string {
   return path.join(pluginRoot(), 'prefs.json')
@@ -36,7 +41,8 @@ export class PrefsStore {
       const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<Prefs>
       this.data = {
         ignore: Array.isArray(parsed.ignore) ? parsed.ignore.filter((s): s is string => typeof s === 'string') : [],
-        takeoverAddWorkspace: parsed.takeoverAddWorkspace !== false
+        takeoverAddWorkspace: parsed.takeoverAddWorkspace !== false,
+        takeoverFilesSidebar: parsed.takeoverFilesSidebar !== false
       }
     } catch {
       // 偏好文件损坏不应影响主功能：退回默认值（下次保存会覆盖修复）。
@@ -52,6 +58,10 @@ export class PrefsStore {
 
   setTakeover(enabled: boolean): Prefs {
     return this.save({ ...this.get(), takeoverAddWorkspace: enabled })
+  }
+
+  setFilesTakeover(enabled: boolean): Prefs {
+    return this.save({ ...this.get(), takeoverFilesSidebar: enabled })
   }
 
   private save(next: Prefs): Prefs {

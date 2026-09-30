@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 远程方法的入参 / 出参类型（宿主与浏览器共享，不依赖 zod）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/wire/dto.ts
@@ -16,7 +16,9 @@ import type {
 import type { RecentTerminal, TerminalView } from '../terminal/registry.js'
 import type { ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult } from '../sftp/remote-fs.js'
 
-export type { RecentTerminal, TerminalView, ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult }
+import type { UpdateStatus, UploadView } from '../update/updater.js'
+
+export type { RecentTerminal, TerminalView, ListResult, ReadResult, RemoteEntry, RemoveResult, SearchResult, UpdateStatus, UploadView }
 
 /**
  * 认证输入。
@@ -174,6 +176,14 @@ export interface MethodIO {
   localMkdir: [{ parent: string; name: string }, { path: string }]
   /** 读整个文件为 base64（桌面版预览内联资源用；有大小上限）。 */
   sftpReadData: [{ hostId: string; path: string }, { path: string; size: number; base64: string }]
+  /** 插件自更新：当前版本、待重启版本、上次查询结果与任务进度。 */
+  updateStatus: [Record<string, never>, UpdateStatus]
+  /** 查询最新版本（GitHub 直连，失败回退 npm 官方源）；force 跳过 5 分钟缓存。 */
+  updateCheck: [{ force?: boolean }, UpdateStatus]
+  /** 开始安装（后台执行）：latest = 下载最新版；upload = 安装已上传并确认的离线包。 */
+  updateInstall: [{ source: 'latest' } | { source: 'upload'; token: string }, UpdateStatus]
+  /** 开关「接管 DSH 文件侧栏」。 */
+  setFilesTakeover: [{ enabled: boolean }, PrefsOutput]
 }
 
 export interface LocalListOutput {
@@ -235,4 +245,6 @@ export interface PrefsOutput {
   defaultIgnore: string[]
   /** 接管「添加工作区」（默认开启）。 */
   takeoverAddWorkspace: boolean
+  /** 接管 DSH 自带的「文件」侧栏（默认开启）。 */
+  takeoverFilesSidebar: boolean
 }

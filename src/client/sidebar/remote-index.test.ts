@@ -1,10 +1,10 @@
-/*
+﻿/*
  * @Description: 右侧栏远程会话判定测试 —— 地址解析、路径映射、按会话查远程工作区
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/remote-index.test.ts
  */
 import { describe, expect, it } from 'vitest'
-import { RemoteIndex, normalizePosix, parseFileAddress, sessionFileAddress, toRemotePath } from './remote-index.js'
+import { RemoteIndex, displayPath, localFileAddress, normalizePosix, parseFileAddress, sessionFileAddress, toLocalPosix, toRemotePath } from './remote-index.js'
 
 const ws = {
   localPath: 'C:\\Users\\yangheng\\.dsh\\workspaces\\remote\\192.168.3.112-ps-22\\测试DSH远程',
@@ -92,5 +92,31 @@ describe('RemoteIndex', () => {
     }, () => undefined)
     await failing.refresh()
     expect(failing.resolveAddress(sessionFileAddress('s', '/x'))).toBeUndefined()
+  })
+})
+
+describe('本地工作区（文件管理 / Git 仓库）', () => {
+  it('本地 POSIX 形式、显示路径、绝对文件地址', () => {
+    expect(toLocalPosix('C:\\DshChat\\ws\\')).toBe('/C:/DshChat/ws')
+    expect(toLocalPosix('D:\\')).toBe('/D:')
+    expect(toLocalPosix('/home/me/p/')).toBe('/home/me/p')
+    expect(displayPath('/C:/DshChat/ws/a.ts')).toBe('C:\\DshChat\\ws\\a.ts')
+    expect(displayPath('/home/ps/a')).toBe('/home/ps/a')
+    expect(localFileAddress('/C:/x/中 文.ts')).toBe('dsh-resource://file/absolute/C:/x/%E4%B8%AD%20%E6%96%87.ts')
+    expect(parseFileAddress(localFileAddress('/C:/x/a.ts'))).toEqual({ scope: 'absolute', path: 'C:/x/a.ts' })
+    expect(parseFileAddress(localFileAddress('/home/a'))).toEqual({ scope: 'absolute', path: '/home/a' })
+  })
+
+  it('workspaceFor：远程会话给远程工作区，本地会话给 local:<会话 id>；对象稳定；bySession 仍只认远程', async () => {
+    const index = indexWith({ r: { cwd: `${ws.localPath}\\sub` }, l: { cwd: 'C:\\DshChat\\proj' }, n: {} })
+    await index.refresh()
+    expect(index.workspaceFor('r')).toMatchObject({ hostId: 'h1', remotePath: '/home/ps/testdsh', local: false })
+    const local = index.workspaceFor('l')
+    expect(local).toEqual({ localPath: 'C:\\DshChat\\proj', hostId: 'local:l', remotePath: '/C:/DshChat/proj', title: 'proj', local: true })
+    expect(index.workspaceFor('l')).toBe(local)
+    expect(index.workspaceFor('n')).toBeUndefined()
+    expect(index.bySession('l')).toBeUndefined()
+    // 本插件的远程文件查看器不认领本地文件（交给宿主 / 其他插件的查看器）
+    expect(index.resolveAddress(localFileAddress('/C:/DshChat/proj/a.ts'))).toBeUndefined()
   })
 })

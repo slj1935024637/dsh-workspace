@@ -1,4 +1,4 @@
-# dsh-workspace
+﻿# dsh-workspace
 
 [简体中文](./README.md) | English
 
@@ -9,8 +9,9 @@ A remote workspace plugin for DeepSeek Harness (DSH). It manages SSH hosts insid
 - **Host management**: nested groups, group defaults inheritance, jump host chains, SOCKS5 / HTTP proxies; host key fingerprints are recorded on first connect (TOFU) and changes are blocked afterwards
 - **Credential vault**: passwords, private keys and other secrets are encrypted with a master password (AES-256-GCM + scrypt) and stored locally; optional "remember on this machine" auto-unlock (protected by DPAPI on Windows)
 - **SSH terminal**: interactive terminal shared between the page and the sidebar, with automatic reconnect
-- **Remote files**: file tree, Monaco editor (syntax highlighting, Ctrl+S to save, conflict detection), Markdown / HTML / image preview, upload and download, context menu (rename / copy / paste / copy path)
-- **Remote Git**: changes (stage / discard / commit), diff, commit history with a branch graph; view any branch, and edit and commit to local branches without checking them out
+- **Files** (formerly Remote files; works in local and remote workspaces): file tree, Monaco editor (syntax highlighting, Ctrl+S to save, conflict detection), Markdown / HTML / image preview, context menu (new / upload / download / rename / copy / paste / delete / copy path); can take over the built-in DSH Files sidebar
+- **Git repository** (formerly Remote Git; works in local and remote workspaces): changes (stage / discard / commit), diff, commit history with a branch graph; view any branch, and edit and commit to local branches without checking them out
+- **Updates**: check GitHub for the latest version and install it from the Settings tab (falls back to the npm registry), or upload an offline .tgz package
 - **Add workspace**: takes over DSH's "Add workspace" dialog, letting you pick a local folder (quick places + drives) or a folder on a remote host (grouped by host group)
 - **Remote Agent tools**: in a remote workspace session, the Agent's read / write / edit / glob / grep / bash run on the remote host; local sessions are unaffected
 
@@ -66,7 +67,7 @@ dsh plugin --profile <profile> remove dsh-workspace
 2. Create a host (optionally in a group) and click "Test connection"
 3. Use the Hosts / Files / Terminals / Connection log tabs to manage hosts, browse files and open terminals
 4. Click DSH's "Add workspace" ("Take over Add workspace" in the Settings tab must be on; it is on by default), pick a remote host and folder to create a remote workspace
-5. In a remote workspace session, open "Remote files", "Remote Git" and "SSH terminal" from the right sidebar
+5. Open "Files" and "Git repository" from the right sidebar in any session (local or remote workspace); remote workspace sessions also have "SSH terminal"
 6. The Settings tab also has the auto-unlock switch, version info and links such as the [changelog](./CHANGELOG.md) (in Chinese)
 
 ## Development

@@ -16,9 +16,15 @@ import { PrefsStore } from './prefs.js'
 import { BindingStore } from './workspace/bindings.js'
 import { PreimageStore } from './agent/preimages.js'
 import { PreviewGrants } from './preview-route.js'
-import { autoUnlockFile, terminalsFile } from './paths.js'
+import { autoUnlockFile, pluginRoot, terminalsFile } from './paths.js'
 import { AutoUnlockStore, type KeyProtector } from './vault/auto-unlock.js'
 import type { ResolvedTarget } from './types.js'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import { Updater, type PluginManagerLike } from './update/updater.js'
+import { realpath } from 'node:fs/promises'
+import { LocalFs, sessionOfLocalId, type LocalScope } from './local/local-fs.js'
+import { LocalGit } from './local/local-git.js'
 
 /** 插件运行时配置（与 index.ts 的 Config schema 对应）。 */
 export interface RuntimeConfig {
@@ -44,6 +50,10 @@ export interface WorkspaceRuntime {
   readonly pool: SshPool
   readonly terminals: TerminalRegistry
   readonly files: RemoteFs
+  /** 本地工作区文件（hostId 形如 local:<sessionId>，根目录按会话 cwd 推导）。 */
+  readonly localFiles: LocalFs
+  /** 本地会话的工作区范围（根目录 + 同仓库的其他 git 工作目录）。 */
+  localScope(id: string): Promise<LocalScope>
   readonly prefs: PrefsStore
   /** 远程工作区：本地占位目录 ↔ {主机, 远程路径}。 */
   readonly bindings: BindingStore
@@ -57,6 +67,10 @@ export interface WorkspaceRuntime {
   readonly autoUnlockReady: Promise<void>
   /** 宿主 HTTP 侧状态（由 index.ts 在路由挂载 / 撤下时更新）。 */
   readonly web: WebState
+  /** 宿主可选服务（由 index.ts 在 ctx.inject 子作用域里填入 / 撤下）。 */
+  readonly host: HostServices
+  /** 插件自更新。 */
+  readonly updater: Updater
   /** 按 hostId 解析出可连接目标（套用分组继承、展开跳板链、按需解密凭据）。 */
   resolveHost(hostId: string): ResolvedTarget
   /** 释放全部资源（终端、文件会话、连接池、内存中的密钥）。 */
@@ -68,6 +82,24 @@ export interface WebState {
   mounted: boolean
   /** 编辑器资源目录（构建产物 lib/assets）；未设置时编辑器不可用。 */
   assetsDir: string | undefined
+}
+
+export interface HostServices {
+  /** 宿主插件管理器（安装 / 升级插件）；纯 dsh web 等环境可能没有。 */
+  pluginManager: PluginManagerLike | undefined
+  /** 宿主会话服务：按 sessionId 取 cwd（本地文件管理 / Git 仓库据此确定根目录）。 */
+  sessions: SessionsLike | undefined
+  /** 冷会话（未加载进内存）的持久化记录。 */
+  sessionPersistence: SessionPersistenceLike | undefined
+}
+
+export interface SessionPersistenceLike {
+  stat(id: string): Promise<{ header?: { cwd?: string } } | undefined> | { header?: { cwd?: string } } | undefined
+}
+
+/** 宿主 sessions 服务里本插件用到的部分。 */
+export interface SessionsLike {
+  get(id: string): { header?: { cwd?: string } } | undefined
 }
 
 export interface RuntimeOverrides {
@@ -128,6 +160,14 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
   // 所以先建出不含它们的部分，再补上。
   const prefs = new PrefsStore()
   const web: WebState = { mounted: false, assetsDir: undefined }
+  const host: HostServices = { pluginManager: undefined, sessions: undefined, sessionPersistence: undefined }
+  // 包根目录的 package.json：打包后本文件在 lib/index.js，源码时在 src/runtime.ts，上一级都是包根。
+  const updater = new Updater({
+    packageFile: fileURLToPath(new URL('../package.json', import.meta.url)),
+    dir: path.join(pluginRoot(), 'updates'),
+    log,
+    pluginManager: () => host.pluginManager
+  })
   const bindings = new BindingStore()
   const preimages = new PreimageStore()
   const previews = new PreviewGrants()
@@ -143,9 +183,9 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
       log.warn('', 'vault', `自动解锁失败：${error instanceof Error ? error.message : String(error)}`)
     }
   })()
-  const partial = { config, log, vault, knownHosts, pool, resolveHost, prefs, web, bindings, preimages, previews, autoUnlock, autoUnlockReady } as Omit<
+  const partial = { config, log, vault, knownHosts, pool, resolveHost, prefs, web, host, updater, bindings, preimages, previews, autoUnlock, autoUnlockReady } as Omit<
     WorkspaceRuntime,
-    'terminals' | 'files' | 'dispose'
+    'terminals' | 'files' | 'localFiles' | 'localScope' | 'dispose'
   >
   const runtime = partial as WorkspaceRuntime
   const terminals = new TerminalRegistry(overrides.shellOpener ?? createSshShellOpener(runtime), log, {
@@ -155,9 +195,31 @@ export function createRuntime(config: RuntimeConfig, overrides: RuntimeOverrides
   })
   const files = new RemoteFs(runtime, () => prefs.get().ignore)
 
+  /**
+   * 本地会话的工作区范围：根目录只由宿主按会话 cwd 推导（浏览器只给会话 id）。
+   * 远程工作区的本地占位目录不算本地工作区 —— 那类会话一律走远程通道。
+   */
+  const localScope = async (id: string): Promise<LocalScope> => {
+    const sessionId = sessionOfLocalId(id)
+    let cwd = host.sessions?.get(sessionId)?.header?.cwd
+    if (cwd === undefined) cwd = (await host.sessionPersistence?.stat(sessionId))?.header?.cwd
+    if (cwd === undefined || cwd === '') {
+      throw new Error(host.sessions === undefined ? '宿主会话服务未就绪，请稍后重试。' : `会话没有工作目录（或会话不存在）：${sessionId}`)
+    }
+    if (bindings.resolve(cwd) !== undefined) throw new Error('这是远程工作区会话，请使用远程文件通道。')
+    const root = await realpath(cwd)
+    return {
+      root,
+      extraRoots: async () => (await new LocalGit(root).worktreeRoots().catch(() => [])).map((p) => path.resolve(p))
+    }
+  }
+  const localFiles = new LocalFs(localScope, log, () => prefs.get().ignore)
+
   Object.assign(runtime, {
     terminals,
     files,
+    localFiles,
+    localScope,
     dispose() {
       // 先关终端与文件会话（它们挂在连接池的连接上），再关连接池。
       terminals.dispose()

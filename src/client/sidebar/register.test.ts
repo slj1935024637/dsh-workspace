@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 右侧栏注册测试（假注册表）—— 三种类型、文件地址按会话认领、单项失败不连累其他
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/register.test.ts
@@ -31,7 +31,7 @@ function fakeCtx(options: { failKind?: string } = {}) {
     sidebarRightTabs: tabs,
     sessions: {
       list: {
-        getSnapshot: () => ({ byId: { remote: { cwd: 'C:\\ph\\app' }, local: { cwd: 'C:\\DshChat' } } }),
+        getSnapshot: () => ({ byId: { remote: { cwd: 'C:\\ph\\app' }, local: { cwd: 'C:\\DshChat' }, none: {} } }),
         subscribe: () => () => undefined
       }
     }
@@ -95,8 +95,8 @@ describe('registerRemoteSidebar', () => {
 })
 
 describe('会话顶部标签（方案 A：跟随当前会话动态注册）', () => {
-  it('当前会话是远程工作区才注册两个标签；切到本地会话撤下；切回再注册', async () => {
-    let key: string | undefined = 'local'
+  it('当前会话有工作区（远程或本地）才注册两个标签；切到没有工作区的会话撤下；切回再注册', async () => {
+    let key: string | undefined = 'none'
     const listeners = new Set<() => void>()
     const current = { getSnapshot: () => ({ key }), subscribe: (l: () => void) => (listeners.add(l), () => listeners.delete(l)) }
     const live = new Set<string>()
@@ -105,7 +105,7 @@ describe('会话顶部标签（方案 A：跟随当前会话动态注册）', ()
         n === 'uiSession'
           ? { adapter: { current } }
           : n === 'sessions'
-            ? { list: { getSnapshot: () => ({ byId: { remote: { cwd: 'C:\\ph\\app' }, local: { cwd: 'C:\\DshChat' } } }), subscribe: () => () => undefined } }
+            ? { list: { getSnapshot: () => ({ byId: { remote: { cwd: 'C:\\ph\\app' }, local: { cwd: 'C:\\DshChat' }, none: {} } }), subscribe: () => () => undefined } }
             : undefined,
       slots: {
         inject: (_n: string, f: () => () => void) => f(),
@@ -125,6 +125,9 @@ describe('会话顶部标签（方案 A：跟随当前会话动态注册）', ()
     for (const l of listeners) l() // 重复通知不重复注册
     expect(live.size).toBe(2)
     key = 'local'
+    for (const l of listeners) l()
+    expect(live.size).toBe(2)
+    key = 'none'
     for (const l of listeners) l()
     expect(live.size).toBe(0)
     key = 'remote'

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 宿主端 Typert 清单 —— 输入用 zod 严格校验，输出直通
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/wire/manifest.ts
@@ -143,7 +143,14 @@ const INPUTS: Record<MethodName, z.ZodType> = {
   // 本地路径是否绝对、是否规范由 local/browse.ts 校验（Windows 与 POSIX 规则不同）。
   localList: z.object({ path: z.string().max(4096).optional() }),
   localMkdir: z.object({ parent: z.string().min(1).max(4096), name: fileName }),
-  sftpReadData: z.object({ hostId: id, path: remotePath })
+  sftpReadData: z.object({ hostId: id, path: remotePath }),
+  updateStatus: empty,
+  updateCheck: z.object({ force: z.boolean().optional() }),
+  updateInstall: z.discriminatedUnion('source', [
+    z.object({ source: z.literal('latest') }),
+    z.object({ source: z.literal('upload'), token: z.string().uuid() })
+  ]),
+  setFilesTakeover: z.object({ enabled: z.boolean() })
 }
 
 /** 远程 Git 各操作的输入校验（路径是否在仓库内由 RemoteGit 再校验一次）。 */

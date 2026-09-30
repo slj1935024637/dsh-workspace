@@ -23,7 +23,9 @@ const READ_ONLY = new Set<MethodName>([
   'sftpRead',
   'sftpSearch',
   'getPrefs',
-  'editorAsset'
+  'editorAsset',
+  'updateStatus',
+  'updateCheck'
 ])
 
 export interface HostKeyAlert {

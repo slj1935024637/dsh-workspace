@@ -1,13 +1,15 @@
-/*
- * @Description: 右侧栏「远程文件」标签 —— 当前远程工作区的 SFTP 文件树，点文件在右侧栏打开；右键菜单（重命名 / 复制 / 粘贴 / 复制路径）
+﻿/*
+ * @Description: 右侧栏「文件管理」标签 —— 当前工作区（远程经 SFTP / 本地直接读写）的文件树，点文件在右侧栏打开；右键菜单（重命名 / 复制 / 粘贴 / 复制路径）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/RemoteFilesTab.tsx
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RemoteEntry } from '../../wire/dto.js'
-import { sessionFileAddress } from './remote-index.js'
+import { displayPath, localFileAddress, sessionFileAddress } from './remote-index.js'
 import { RemoteFileViewer, type SidebarBodyProps } from './RemoteFileTab.js'
 import { Split } from './Split.js'
+import { NOTE_HEIGHT, ROW_HEIGHT, VirtualList } from './VirtualList.js'
+import { isOutdatedHostError, useLocalSupport } from './host-support.js'
 import { RenameInput, useRemoteFileMenu } from './file-menu.js'
 import { EmptyState, FileIcon, IconButton, IconChevron, IconEye, IconFile, IconFolder, IconRefresh } from './ui.js'
 
@@ -21,7 +23,9 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
   const { t, api, index, sessionId } = props
   const [, setVersion] = useState(0)
   useEffect(() => index.subscribe(() => setVersion((v) => v + 1)), [index])
-  const workspace = index.bySession(sessionId)
+  const workspace = index.workspaceFor(sessionId)
+  // 升级后只刷新了页面、宿主端还是旧版：本地会话直接提示重启，而不是报「主机不存在：local:…」。
+  const support = useLocalSupport(api, workspace?.local === true)
   // 依赖用字符串而不是 workspace 对象：对象换了但内容没变时不重载。
   const hostId = workspace?.hostId
   const root = workspace?.remotePath
@@ -36,7 +40,8 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
    * 会话顶部标签（没有标签信息）窄时也在本页打开（整页覆盖列表，✕ 返回）。
    */
   const openFile = (path: string): void => {
-    if (!wideRef.current && props.useTabInfo !== undefined) props.openResource(sessionFileAddress(sessionId, path))
+    // 本地文件交给宿主（或其他插件）的查看器：本插件的文件查看器只认领远程文件。
+    if (!wideRef.current && props.useTabInfo !== undefined) props.openResource(workspace?.local === true ? localFileAddress(path) : sessionFileAddress(sessionId, path))
     else setSelected(path)
   }
 
@@ -72,12 +77,17 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
     },
     onPasted: (dir) => {
       if (dir !== root) setExpanded((cur) => new Set(cur).add(dir))
+    },
+    onCreatedFile: (path) => openFile(path),
+    onRemoved: (path) => {
+      setSelected((cur) => (cur !== null && (cur === path || cur.startsWith(`${path}/`)) ? null : cur))
     }
   })
 
   if (workspace === undefined || root === undefined) {
-    return <div className="dshws-side-note">{t('side.notRemote')}</div>
+    return <div className="dshws-side-note">{t('side.noWorkspace')}</div>
   }
+  if (support === 'outdated') return <div className="dshws-side-note" data-tone="error">{t('side.localNeedsRestart')}</div>
 
   const toggle = (dir: string): void => {
     const next = new Set(expanded)
@@ -89,57 +99,70 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
     setExpanded(next)
   }
 
-  const renderDir = (dir: string, depth: number) => {
+  /**
+   * 把展开着的目录树拍平成行（虚拟滚动只渲染可见的几十行，几千个文件也不卡）。
+   * 行的种类：条目 / 正在改名的条目 / 加载中或出错的提示。
+   */
+  type Row = { kind: 'entry'; entry: RemoteEntry; depth: number } | { kind: 'note'; key: string; text: string; depth: number; tone?: 'error' }
+  const rows: Row[] = []
+  const walk = (dir: string, depth: number): void => {
     const state = dirs[dir]
     if (state === undefined || (state.loading && state.entries === undefined)) {
-      return <div className="dshws-tree-note" style={{ paddingLeft: 12 + depth * 14 }}>{t('files.loading')}</div>
+      rows.push({ kind: 'note', key: `${dir}#loading`, text: t('files.loading'), depth })
+      return
     }
     if (state.error !== undefined) {
-      return <div className="dshws-tree-note" data-tone="error" style={{ paddingLeft: 12 + depth * 14 }}>{state.error}</div>
+      rows.push({ kind: 'note', key: `${dir}#error`, text: isOutdatedHostError(state.error) ? t('side.localNeedsRestart') : state.error, depth, tone: 'error' })
+      return
     }
-    const visible = (state.entries ?? []).filter((e) => showHidden || !e.hidden)
-    if (visible.length === 0 && depth === 0) return <EmptyState text={t('add.emptyDir')} />
-    return visible.map((e) => {
-      const isDir = e.type === 'dir' || e.linkIsDir === true
-      const open = expanded.has(e.path)
+    for (const e of state.entries ?? []) {
+      if (!showHidden && e.hidden) continue
+      rows.push({ kind: 'entry', entry: e, depth })
+      if ((e.type === 'dir' || e.linkIsDir === true) && expanded.has(e.path)) walk(e.path, depth + 1)
+    }
+  }
+  walk(root, 0)
+  const rootEmpty = rows.length === 0
+
+  const renderRow = (r: Row) => {
+    if (r.kind === 'note') {
       return (
-        <div key={e.path}>
-          {menu.renaming === e.path ? (
-            <RenameInput
-              initial={e.name}
-              paddingLeft={6 + depth * 14}
-              onSubmit={(name) => void menu.submitRename(e.path, name)}
-              onCancel={menu.cancelRename}
-            />
-          ) : (
-            <button
-              type="button"
-              className="dshws-row"
-              data-ignored={e.ignored}
-              data-hidden={e.hidden}
-              data-selected={selected === e.path}
-              style={{ paddingLeft: 6 + depth * 14 }}
-              title={e.path}
-              onClick={() => (isDir ? toggle(e.path) : openFile(e.path))}
-              onContextMenu={(ev) => menu.openFor(ev, e.path, isDir)}
-            >
-              <span className="dshws-row-caret">{isDir ? <IconChevron size={12} open={open} /> : null}</span>
-              {isDir ? <IconFolder open={open} /> : <FileIcon name={e.name} />}
-              <span className="dshws-row-name">{e.name}</span>
-              {e.linkTarget !== undefined ? <span className="dshws-row-dim">→ {e.linkTarget}</span> : null}
-            </button>
-          )}
-          {isDir && open ? <div className="dshws-row-children">{renderDir(e.path, depth + 1)}</div> : null}
+        <div className="dshws-tree-note" data-tone={r.tone} title={r.text} style={{ paddingLeft: 12 + r.depth * 14 }}>
+          {r.text}
         </div>
       )
-    })
+    }
+    const e = r.entry
+    const depth = r.depth
+    const isDir = e.type === 'dir' || e.linkIsDir === true
+    const open = expanded.has(e.path)
+    if (menu.renaming === e.path) {
+      return <RenameInput initial={e.name} paddingLeft={6 + depth * 14} onSubmit={(name) => void menu.submitRename(e.path, name)} onCancel={menu.cancelRename} />
+    }
+    return (
+      <button
+        type="button"
+        className="dshws-row"
+        data-ignored={e.ignored}
+        data-hidden={e.hidden}
+        data-selected={selected === e.path}
+        style={{ paddingLeft: 6 + depth * 14 }}
+        title={displayPath(e.path)}
+        onClick={() => (isDir ? toggle(e.path) : openFile(e.path))}
+        onContextMenu={(ev) => menu.openFor(ev, e.path, isDir)}
+      >
+        <span className="dshws-row-caret">{isDir ? <IconChevron size={12} open={open} /> : null}</span>
+        {isDir ? <IconFolder open={open} /> : <FileIcon name={e.name} />}
+        <span className="dshws-row-name">{e.name}</span>
+        {e.linkTarget !== undefined ? <span className="dshws-row-dim">→ {e.linkTarget}</span> : null}
+      </button>
+    )
   }
-
   const list = (
     <div className="dshws-side">
       <div className="dshws-toolbar">
         <IconFolder open />
-        <span className="dshws-toolbar-title" title={`${workspace.title}: ${root}`}>
+        <span className="dshws-toolbar-title" title={`${workspace.title}: ${displayPath(root)}`}>
           {workspace.title}
         </span>
         <IconButton title={t('add.showHidden')} active={showHidden} onClick={() => setShowHidden(!showHidden)}>
@@ -155,12 +178,17 @@ export function RemoteFilesTab(props: SidebarBodyProps) {
           <IconRefresh />
         </IconButton>
       </div>
-      <div className="dshws-subbar dshws-mono" title={root}>
-        {root}
+      <div className="dshws-subbar dshws-mono" title={displayPath(root)}>
+        {displayPath(root)}
       </div>
-      <div className="dshws-side-tree" onContextMenu={menu.openForRoot}>
-        {renderDir(root, 0)}
-      </div>
+      <VirtualList
+        items={rows}
+        itemKey={(r) => (r.kind === 'entry' ? r.entry.path : r.key)}
+        itemHeight={(r) => (r.kind === 'entry' ? ROW_HEIGHT : NOTE_HEIGHT)}
+        renderItem={renderRow}
+        onContextMenu={menu.openForRoot}
+        footer={rootEmpty ? <EmptyState text={t('add.emptyDir')} /> : undefined}
+      />
       {menu.node}
     </div>
   )

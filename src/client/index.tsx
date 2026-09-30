@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: dsh-workspace 浏览器端入口 —— 左侧入口行 + 主区整页
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/index.tsx
@@ -11,6 +11,7 @@ import { WorkspacePage } from './page/WorkspacePage.js'
 import { AddWorkspaceFlow } from './workspace/AddWorkspaceFlow.js'
 import { registerRemoteSidebar } from './sidebar/register.js'
 import { onTakeoverChange } from './workspace/takeover.js'
+import { readAwaiting, requestSection } from './page/update-flag.js'
 import { closeBridgeDrawer, holdSlotHead, shieldAddWorkspaceClicks, type SlotsPeek } from './workspace/bridge-compat.js'
 
 export const name = 'dsh-workspace'
@@ -106,6 +107,17 @@ export function apply(ctx: ClientContext): void {
       WorkspacePage as never
     )
   )
+
+  // 安装新版本时宿主会重载本插件的浏览器端代码，「远程工作区」页面被关回会话、「升级完成」提示随之丢失。
+  // 开始安装时留了标记：重载后直接回到全局配置，由更新卡片弹出重启提示（见 page/update-flag.ts）。
+  if (readAwaiting() !== null) {
+    requestSection('settings')
+    const reopen = setTimeout(() => {
+      const layout = ctx.get('layout') as { selectPanel?: (id: string | null) => void } | undefined
+      layout?.selectPanel?.(PANEL_ID)
+    }, 300)
+    ctx.effect(() => () => clearTimeout(reopen), 'dsh-workspace: reopen after update')
+  }
 
   // 远程工作区的右侧栏：远程文件查看器 / 远程文件树 / SSH 终端。失败只记控制台，不影响其余功能。
   ctx.effect(() => {

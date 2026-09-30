@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 页内对话框服务 —— 替代 window.prompt / window.confirm
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/dialogs.tsx
@@ -26,6 +26,9 @@ export interface ConfirmOptions {
   title: string
   message: ReactNode
   confirmLabel?: string
+  /** 取消按钮文字（默认「取消」）；hideCancel 时只保留确认按钮。 */
+  cancelLabel?: string
+  hideCancel?: boolean
   danger?: boolean
 }
 
@@ -85,9 +88,11 @@ export function DialogProvider(props: { t: Translate; children: ReactNode }) {
           onClose={() => finish(false)}
           footer={
             <div className="dshws-dialog-actions">
-              <Button size="sm" variant="outline" onClick={() => finish(false)}>
-                {props.t('form.cancel')}
-              </Button>
+              {current.options.hideCancel === true ? null : (
+                <Button size="sm" variant="outline" onClick={() => finish(false)}>
+                  {current.options.cancelLabel ?? props.t('form.cancel')}
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="primary"

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 侧边栏用的「远程会话」判定 —— 远程工作区列表缓存、文件地址解析、路径映射
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/remote-index.ts
@@ -43,6 +43,16 @@ export function sessionFileAddress(sessionId: string, path: string): string {
 }
 
 /**
+ * 本地文件（本地 POSIX 形式）的绝对文件地址：交给宿主 / 其他插件的查看器打开本地文件。
+ * /C:/x/a.ts → dsh-resource://file/absolute/C:/x/a.ts；/home/a → dsh-resource://file/absolute/home/a
+ */
+export function localFileAddress(p: string): string {
+  const enc = (s: string): string => encodeURIComponent(s).replace(/%3A/gi, ':')
+  const native = /^\/[A-Za-z]:/.test(p) ? p.slice(1) : p.replace(/^\/+/, '')
+  return `${FILE_ADDRESS_PREFIX}absolute/${native.split('/').map(enc).join('/')}`
+}
+
+/**
  * 本机路径的比较键：统一斜杠、去结尾斜杠。
  * 只有 Windows 风格路径（盘符 / UNC）忽略大小写 —— Linux 区分大小写，一律转小写会让只差大小写的两个工作区互相串。
  */
@@ -82,6 +92,31 @@ export function toRemotePath(ws: RemoteWorkspaceView, input: string): string | u
   if (/^[A-Za-z]:\//.test(p) || p.startsWith('//')) return undefined
   if (p.startsWith('/')) return normalizePosix(p)
   return normalizePosix(`${ws.remotePath}/${p}`)
+}
+
+/** 本地会话在线上的「主机 id」前缀（与宿主 local/local-fs.ts 的 LOCAL_ID_PREFIX 一致）。 */
+export const LOCAL_HOST_PREFIX = 'local:'
+
+/** 侧栏面板的工作区：远程工作区，或本地会话的 cwd。 */
+export interface SideWorkspace extends RemoteWorkspaceView {
+  local: boolean
+}
+
+/** 本机路径 → 本地 POSIX 形式（C:\x → /C:/x；macOS / Linux 原样），去掉结尾斜杠。 */
+export function toLocalPosix(p: string): string {
+  const s = p.replace(/\\/g, '/')
+  const trimmed = s.length > 1 ? s.replace(/\/+$/, '') : s
+  return /^[A-Za-z]:/.test(trimmed) ? `/${trimmed}` : trimmed
+}
+
+/** 界面显示 / 复制用的路径：本地 Windows 路径还原成 C:\x\y，其余原样。 */
+export function displayPath(p: string): string {
+  return /^\/[A-Za-z]:(\/|$)/.test(p) ? p.slice(1).replace(/\//g, '\\') : p
+}
+
+function baseNameOf(p: string): string {
+  const s = p.replace(/[\\/]+$/, '')
+  return s.slice(Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\')) + 1) || s
 }
 
 interface SessionsService {
@@ -138,6 +173,31 @@ export class RemoteIndex {
 
   bySession(sessionId: string): RemoteWorkspaceView | undefined {
     return this.byLocalPath(this.sessionCwd(sessionId))
+  }
+
+  private localCache = new Map<string, SideWorkspace>()
+
+  /**
+   * 「文件管理」「Git 仓库」用的工作区：远程会话 = 远程工作区；本地会话 = 会话 cwd（hostId 为 local:<会话 id>，
+   * 路径用本地 POSIX 形式，宿主按会话推导根目录并限制在其内）。没有 cwd 返回 undefined。
+   * 同一会话、同一 cwd 返回同一个对象，依赖它的面板不会因为对象换了而重载。
+   */
+  workspaceFor(sessionId: string): SideWorkspace | undefined {
+    const remote = this.bySession(sessionId)
+    if (remote !== undefined) return { ...remote, local: false }
+    const cwd = this.sessionCwd(sessionId)
+    if (cwd === undefined || cwd === '') return undefined
+    const cached = this.localCache.get(sessionId)
+    if (cached !== undefined && cached.localPath === cwd) return cached
+    const view: SideWorkspace = {
+      localPath: cwd,
+      hostId: `${LOCAL_HOST_PREFIX}${sessionId}`,
+      remotePath: toLocalPosix(cwd),
+      title: baseNameOf(cwd),
+      local: true
+    }
+    this.localCache.set(sessionId, view)
+    return view
   }
 
   /** 文件地址 → {工作区, 远程路径}；不属于远程工作区返回 undefined。 */

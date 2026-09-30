@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: SFTP 上传 / 下载的 HTTP 流式路由（与终端同一道信任围栏）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/sftp/http.ts
@@ -17,12 +17,15 @@ import { VaultLockedError, VaultUninitializedError } from '../vault/store.js'
 import { ERROR_CODES, SFTP_HTTP_PREFIX } from '../wire/contract.js'
 import type { WorkspaceRuntime } from '../runtime.js'
 import { RemoteExistsError, type RemoteFs } from './remote-fs.js'
+import { isLocalId, type LocalFs } from '../local/local-fs.js'
 
 export { SFTP_HTTP_PREFIX }
 
 export interface SftpHttpDeps {
   rt: WorkspaceRuntime
   fs: RemoteFs
+  /** 本地工作区（host=local:<sessionId>）。 */
+  localFs?: LocalFs
   trustedHosts: () => readonly string[]
   maxUploadBytes: number
 }
@@ -48,7 +51,8 @@ function mapError(res: ServerResponse, error: unknown): void {
   if (error instanceof RemoteExistsError) return fail(res, 409, ERROR_CODES.exists, error.message)
   if (error instanceof UploadTooLargeError) return fail(res, 413, 'dsh-workspace/too-large', error.message)
   const message = error instanceof Error ? error.message : String(error)
-  const notFound = typeof error === 'object' && error !== null && (error as { code?: number }).code === 2
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined
+  const notFound = code === 2 || code === 'ENOENT'
   return fail(res, notFound ? 404 : 400, notFound ? ERROR_CODES.notFound : ERROR_CODES.failed, message)
 }
 
@@ -117,13 +121,16 @@ export function createSftpHttpHandler(deps: SftpHttpDeps) {
     const url = new URL(req.url ?? '/', 'http://x')
     const action = url.pathname.slice(SFTP_HTTP_PREFIX.length + 1)
     const hostId = url.searchParams.get('host') ?? ''
-    if (hostId === '' || deps.rt.vault.getHost(hostId) === undefined) {
+    const local = isLocalId(hostId) && deps.localFs !== undefined
+    if (!local && (hostId === '' || deps.rt.vault.getHost(hostId) === undefined)) {
       return fail(res, 404, ERROR_CODES.notFound, '主机不存在。')
     }
+    // 本地工作区与远程主机同一套接口；本地的根目录限制在 LocalFs 内强制。
+    const fs: Pick<RemoteFs, 'openDownload' | 'upload'> = local ? (deps.localFs as LocalFs) : deps.fs
 
     if (action === 'download' && req.method === 'GET') {
       try {
-        const { stream, size, name } = await deps.fs.openDownload(hostId, url.searchParams.get('path') ?? '')
+        const { stream, size, name } = await fs.openDownload(hostId, url.searchParams.get('path') ?? '')
         res.writeHead(200, {
           'Content-Type': 'application/octet-stream',
           'Content-Length': size,
@@ -152,7 +159,7 @@ export function createSftpHttpHandler(deps: SftpHttpDeps) {
         if (Number.isFinite(declared) && declared > deps.maxUploadBytes) {
           throw new UploadTooLargeError(deps.maxUploadBytes)
         }
-        const result = await deps.fs.upload(
+        const result = await fs.upload(
           hostId,
           url.searchParams.get('dir') ?? '',
           url.searchParams.get('name') ?? '',

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 宿主与浏览器共享的 Typert 远程契约（方法名、描述符构造）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/wire/contract.ts
@@ -58,7 +58,11 @@ export const METHODS = [
   'sftpCopy',
   'localList',
   'localMkdir',
-  'sftpReadData'
+  'sftpReadData',
+  'updateStatus',
+  'updateCheck',
+  'updateInstall',
+  'setFilesTakeover'
 ] as const
 
 /** 经远程调用分段下发的编辑器资源。 */
@@ -120,6 +124,9 @@ export const ERROR_CODES = {
 // 注意：不能带结尾斜杠。宿主 webserver 的前缀匹配规则是「路径 === 前缀 或 以 前缀 + '/' 开头」，
 // 带了结尾斜杠就要求 '/dsh-workspace/sftp//...'，永远匹配不上（曾导致桌面版上传下载全部 404）。
 export const SFTP_HTTP_PREFIX = '/dsh-workspace/sftp'
+
+/** 离线安装包上传路由前缀（同样不能带结尾斜杠）。 */
+export const UPDATE_HTTP_PREFIX = '/dsh-workspace/update'
 
 /** 终端 WebSocket 路径（宿主注册、浏览器连接两端共用）。 */
 export const TERMINAL_WS_PATH = '/dsh-workspace/ws/terminal'

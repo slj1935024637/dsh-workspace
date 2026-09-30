@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 远程工作区主页面（主区整页）
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/page/WorkspacePage.tsx
@@ -15,6 +15,7 @@ import { HostList, type TestState } from './HostList.js'
 import { LogPanel } from './LogPanel.js'
 import { TerminalsPane } from './TerminalsPane.js'
 import { DialogProvider, useDialogs } from './dialogs.js'
+import { takeRequestedSection } from './update-flag.js'
 import { FilesPane } from './FilesPane.js'
 import { SettingsPane } from './SettingsPane.js'
 import { useWorkspace, messageOf } from './useWorkspace.js'
@@ -60,7 +61,8 @@ function WorkspacePageInner(props: WorkspacePageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const [section, setSection] = useState<Section>('hosts')
+  // 插件代码被宿主重载（例如刚装完新版本）后，入口会请求直接打开某个分区（见 update-flag.ts）。
+  const [section, setSection] = useState<Section>(() => (takeRequestedSection() as Section | null) ?? 'hosts')
   const [activeTerminal, setActiveTerminal] = useState<string | null>(null)
   const [opening, setOpening] = useState<string | null>(null)
   const [filesHost, setFilesHost] = useState<string | null>(null)

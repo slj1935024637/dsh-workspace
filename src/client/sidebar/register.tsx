@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 向 DSH 原生右侧栏注册远程工作区的三种标签
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/register.tsx
@@ -13,6 +13,7 @@
  * 注意等的是 sidebarRightTabs 服务而不是插槽声明：宿主先声明插槽、后提供服务（better-sidebar 踩过）。
  */
 import { createElement } from 'react'
+import { FitView } from './fit-height.js'
 import type { ClientContext, Translate } from '../context.js'
 import type { WorkspaceApi } from '../api.js'
 import { RemoteIndex } from './remote-index.js'
@@ -20,6 +21,7 @@ import { RemoteFileTab, type SidebarTabInfo } from './RemoteFileTab.js'
 import { RemoteFilesTab } from './RemoteFilesTab.js'
 import { SshTab } from './SshTab.js'
 import { GitTab } from './GitTab.js'
+import { TAKEOVER_FILES_ID, filesTakeover, manageFilesTakeover, onFilesTakeoverToggle, type FilesRegistry } from './files-takeover.js'
 
 interface TabRegistry {
   register(definition: {
@@ -32,6 +34,8 @@ interface TabRegistry {
     title: (address: string) => string
     guide?: ReadonlyArray<{ id: string; order: number; title: () => string; description?: () => string; icon?: (p: { size?: number }) => unknown }>
   }): () => void
+  get?(kind: string): { id: string } | undefined
+  subscribe?(listener: () => void): () => void
 }
 
 interface SidebarRight {
@@ -170,6 +174,45 @@ export function registerRemoteSidebar(ctx: ClientContext, t: Translate, api: Wor
         off()
       }
     })
+    // 接管 DSH 自带的「文件」侧栏（kind files）：Mod+P、旧「文件」标签都改开「文件管理」。
+    // 不带引导入口：自己的「文件管理」入口已在（order 11），DSH 的「文件」入口随被遮蔽的定义一起隐藏。
+    // 延迟判断：给先加载的插件（better-sidebar）留出注册时间，它已接管就不抢。
+    try {
+      let enabled = true
+      let ready = false
+      const takeover = manageFilesTakeover({
+        tabs: tabs as unknown as FilesRegistry,
+        title: () => t('side.remoteFiles'),
+        mount: () => slots(TAKEOVER_FILES_ID, RemoteFilesTab),
+        enabled: () => enabled,
+        ready: () => ready,
+        log
+      })
+      sub.effect(() => {
+        const offToggle = onFilesTakeoverToggle((next) => {
+          enabled = next
+          takeover.evaluate()
+        })
+        const timer = setTimeout(() => {
+          void api
+            .call('getPrefs', {})
+            .then((p) => p.takeoverFilesSidebar, () => true)
+            .then((next) => {
+              enabled = next
+              ready = true
+              takeover.evaluate()
+            })
+        }, 1500)
+        return () => {
+          clearTimeout(timer)
+          offToggle()
+          takeover.dispose()
+          filesTakeover.set({ state: 'pending' })
+        }
+      }, 'dsh-workspace: files sidebar takeover')
+    } catch (error) {
+      log('接管「文件」侧栏失败', error)
+    }
     attempt(t('side.ssh'), () => {
       const off = tabs.register({
         id: SSH_ID,
@@ -217,10 +260,10 @@ export interface ConversationTabsDeps {
 }
 
 /**
- * 会话顶部「对话 / 轨迹」后面的「远程文件」「远程 Git」。
+ * 会话顶部「对话 / 轨迹」后面的「文件管理」「Git 仓库」。
  *
  * 顶部标签列表是全局的（不分会话），也没有按会话显示的条件字段 —— 所以跟着「当前会话」动态注册：
- * 当前会话是远程工作区就注册，否则撤下（用户已确认的方案 A；切换会话时标签会随之出现 / 消失）。
+ * 当前会话有工作区（远程或本地）就注册，否则撤下（切换会话时标签会随之出现 / 消失）。
  * 撤下时若正停在这两个标签上，宿主会自动回到「对话」。
  * 组件拿到的 sessionId 是标签所在会话：已挂载的其他会话里也会看到，此时组件显示「不是远程工作区」。
  */
@@ -253,8 +296,9 @@ export function registerConversationTabs(ctx: ClientContext, deps: ConversationT
 }
 
 function mountConversationTabs(ctx: ClientContext, current: CurrentSession, deps: ConversationTabsDeps, log: (m: string, e?: unknown) => void): () => void {
+  // 会话顶部标签的视图区高度随内容增长：把面板钉成可视高度，左右两列才能各自滚动（见 fit-height.ts）。
   const make = (Body: typeof RemoteFilesTab) => (props: { sessionId: string }) =>
-    createElement('div', { className: 'dshws-conv-view' }, createElement(Body, { ...deps, sessionId: props.sessionId }))
+    createElement(FitView, null, createElement(Body, { ...deps, sessionId: props.sessionId }))
   const FilesView = make(RemoteFilesTab)
   const GitView = make(GitTab)
 
@@ -274,7 +318,8 @@ function mountConversationTabs(ctx: ClientContext, current: CurrentSession, deps
   }
   const sync = (): void => {
     const key = current.getSnapshot()?.key
-    const remote = key !== undefined && deps.index.bySession(key) !== undefined
+    // 本地会话也有「文件管理」「Git 仓库」：只要会话有工作区（cwd）就注册。
+    const remote = key !== undefined && deps.index.workspaceFor(key) !== undefined
     if (remote && registered === null) {
       try {
         registered = register()

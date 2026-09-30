@@ -1,4 +1,4 @@
-/*
+﻿/*
  * @Description: 右侧栏「远程文件」查看器 —— 远程会话里点开的文件经 SFTP 读取，Monaco 编辑，HTML / 图片可预览
  * @Author: YangHeng
  * @FilePath: /dsh-workspace/src/client/sidebar/RemoteFileTab.tsx
@@ -10,7 +10,7 @@ import { RemoteCallError } from '../api.js'
 import { ERROR_CODES } from '../../wire/contract.js'
 import type { ReadResult } from '../../wire/dto.js'
 import { CodeEditor } from '../files/CodeEditor.js'
-import type { RemoteIndex } from './remote-index.js'
+import { displayPath, type RemoteIndex } from './remote-index.js'
 import { directoryHref, markdownDocument } from './markdown.js'
 import { isDesktopRenderer } from '../host-url.js'
 import { fallbackReader, inlineHtml, type InlineFailure } from './inline-preview.js'
@@ -198,7 +198,7 @@ export function RemoteFileViewer(props: RemoteFileViewerProps) {
     <div className="dshws-side">
       <div className="dshws-toolbar">
         <FileIcon name={name} />
-        <span className="dshws-toolbar-title" title={`${props.workspaceTitle}: ${remotePath}`}>
+        <span className="dshws-toolbar-title" title={`${props.workspaceTitle}: ${displayPath(remotePath)}`}>
           {name}
           {dirty ? <span className="dshws-dirty" title={t('editor.saveHint')}> ●</span> : null}
         </span>
@@ -226,8 +226,8 @@ export function RemoteFileViewer(props: RemoteFileViewerProps) {
           </IconButton>
         ) : null}
       </div>
-      <div className="dshws-subbar dshws-mono" title={remotePath}>
-        {remotePath}
+      <div className="dshws-subbar dshws-mono" title={displayPath(remotePath)}>
+        {displayPath(remotePath)}
       </div>
       {conflict !== null ? (
         <div className="dshws-side-banner" data-tone="warn">
